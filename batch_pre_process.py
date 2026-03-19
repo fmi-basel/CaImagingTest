@@ -38,6 +38,11 @@ for series_path in series_paths:
     print(f"{'='*60}")
 
     series_dir = os.path.join(day_dir, series_id)
+    # If motion corrected output already exists, skip processing
+    motion_corrected_dir = os.path.join(series_dir, 'suite2p_corrected')
+    if os.path.exists(motion_corrected_dir) and len(os.listdir(motion_corrected_dir)) == 3:  # we output 3 files
+        print(f"Motion corrected data already exists for {series_id}. Skipping processing.")
+        continue    
     results_dir = os.path.join(series_dir, 'results')
     os.makedirs(results_dir, exist_ok=True)
     experiment_id = f"{day_id}_{series_id}"

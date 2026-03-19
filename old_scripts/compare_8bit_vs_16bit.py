@@ -79,9 +79,11 @@ from roi_processor import ROISelector
 # Path to your converted file
 
 
-dir = '/Users/guerbura/Desktop/current/data/2p/binary_comparison/ana'
-series_id = 'S1-T23367'
+dir = '/Volumes/tungsten/scratch/gfelsenb/Hanna/2p-imaging/2026_02_27/fly3/session_post'
+series_id = 'S1-T24250'
 video_dir = os.path.join(dir, series_id)
+video_dir = dir
+
 bin_path = os.path.join(video_dir, f'{series_id}_ch525.bin')
 
 # Microscope settings (Verify these!)
@@ -146,11 +148,15 @@ plt.axis('off')
 plt.tight_layout()
 plt.show()
 #%% Manual ROI selection on mean image of bin_sample_16
-mean_img_16 = bin16_downsampled.std(axis=0)
+mean_img = bin8_downsampled.std(axis=0)
+mean_img = bin16_downsampled.std(axis=0)
+
+# selected_data = bin8_downsampled
+selected_data = bin16_downsampled
 %matplotlib qt
 selector = ROISelector(
-    movie=bin8_downsampled,
-    sd_map=mean_img_16,
+    movie=selected_data,
+    sd_map=mean_img,
     fs=62.5,
 )
 
