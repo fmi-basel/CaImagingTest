@@ -29,6 +29,9 @@ if not os.path.exists(day_dir):
 
 db_path = os.path.join(experiment_dir, f'{container_id}_database.csv')
 series_paths = sorted(glob.glob(os.path.join(day_dir, 'S1-T*')))
+for series_path in series_paths:
+    series_id = os.path.basename(series_path)
+    print(f"Found series: {series_id}")
 
 #%% Batch process each series up to and including motion correction
 for series_path in series_paths:
