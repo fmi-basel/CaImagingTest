@@ -2,15 +2,12 @@
 import os
 import numpy as np
 import pandas as pd
-import json 
 import pickle
-import suite2p
 import matplotlib.pyplot as plt
+from suite2p.default_ops import default_ops
 from utilities import (
     load_experiment_metadata,
-    downsample_video,
     export_visualization_video,
-    median_denoise_temporal,
     temporal_denoise,
     map_stimulus_ids_from_osf,
     read_ini_file,
@@ -24,7 +21,7 @@ from utilities import (
     parse_aurora_vial_info,
     run_motion_correction_suite2p,
 )
-from roi_processor import ROISelector, run_roi_selection
+from roi_processor import run_roi_selection
 from helpers_figures import (
     plot_mean_std_projection,
     plot_roi_masks_and_traces,
@@ -191,7 +188,8 @@ motion_params = get_motion_correction_params(motion_correction_profile)
 print(f"Using Suite2p motion profile: {motion_correction_profile}")
 
 
-motion_ops_profile = suite2p.default_ops()
+motion_ops_profile = default_ops()
+
 motion_ops_profile['fs'] = downsampled_fr
 motion_ops_profile['nonrigid'] = False
 motion_ops_profile['block_size'] = (128, 128)
@@ -202,7 +200,7 @@ motion_ops_profile['maxregshift'] = 0.3
 motion_ops_profile['maxregshiftNR'] = 10
 
 motion_result = run_motion_correction_suite2p(
-    movie_data=data_downsampled_interp[:,:,:],  # Crop 100 pixels on each side to avoid edge artifacts
+    movie_data=data_downsampled_interp[:,:,:],  
     save_path=save_path,
     series_id=series_id,
     motion_ops_profile=motion_ops_profile,
