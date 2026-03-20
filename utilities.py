@@ -253,7 +253,7 @@ def read_lvd_data(lvd_path):
         inputrange = np.fromfile(file, dtype='>f8', count=1)
         lvd_array = np.fromfile(file, dtype='>f8')
 
-    lvd_data = np.reshape(lvd_array, (int(len(lvd_array) / numchannels), int(numchannels)))
+    lvd_data = np.reshape(lvd_array, (int(len(lvd_array) / numchannels[0]), int(numchannels[0])))
     return lvd_data, float(lvd_samplerate[0])
 
 
