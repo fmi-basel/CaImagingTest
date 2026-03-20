@@ -13,7 +13,10 @@ from batch_utilities import (
 
 
 #%% Adjust the following depending on the experiment
-base_dir = "/Volumes/tungsten/scratch/gfelsenb/Ana/2p-imaging/burak/"
+server_dir = "W:"
+# server_dir = "/Volumes/tungsten"
+
+base_dir = os.path.join(server_dir, 'scratch','gfelsenb', 'Ana', '2p-imaging', 'burak')
 container_id = '2026_03_Beta1_counterconditioned_dendrites'
 day_id = '2026_02_11'
 
@@ -103,3 +106,5 @@ for series_path in series_paths:
 
     print(f"Series {series_id} complete.")
 
+
+# %%
