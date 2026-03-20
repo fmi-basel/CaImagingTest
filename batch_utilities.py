@@ -114,10 +114,10 @@ def run_motion_correction(data_downsampled_interp, series_id, series_dir, result
 
     processed_movie = np.load(motion_result['reg_npy'], mmap_mode='r')
     ops = np.load(motion_result['ops_path'], allow_pickle=True).item()
-    output_ops = np.load(motion_result['output_ops_path'], allow_pickle=True)
+    output_ops = np.load(motion_result['output_ops_path'], allow_pickle=True).item()
 
-    yoff = output_ops[4][0]
-    xoff = output_ops[4][1]
+    yoff = output_ops['yoff']
+    xoff = output_ops['xoff']
     fig, ax = plt.subplots(figsize=(12, 4))
     ax.plot(xoff, label='X offset', alpha=0.7)
     ax.plot(yoff, label='Y offset', alpha=0.7)
@@ -139,5 +139,5 @@ def run_motion_correction(data_downsampled_interp, series_id, series_dir, result
         panel_titles=["Motion-corrected", "Input"],
     )
 
-    processed_movie_cropped = processed_movie  # Adjust using output_ops[-2]/[-1] if cropping needed
+    processed_movie_cropped = processed_movie  # Adjust using output_ops['yrange']/['xrange'] if cropping needed
     return processed_movie_cropped, ops, output_ops

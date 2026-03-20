@@ -83,8 +83,6 @@ for day_id in day_ids:
 
         # Motion correction parameters — adjust per experiment type
         motion_ops_profile = default_ops()
-        
-
         motion_ops_profile['fs'] = downsampled_fr
         motion_ops_profile['nonrigid'] = False
         motion_ops_profile['block_size'] = (128, 128)

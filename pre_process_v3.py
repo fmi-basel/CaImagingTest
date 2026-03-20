@@ -214,11 +214,11 @@ print("Saved .npy and cleaned up temp binary.")
 processed_movie = np.load(reg_npy, mmap_mode='r')
 
 ops = np.load(motion_result['ops_path'], allow_pickle=True).item()
-output_ops = np.load(motion_result['output_ops_path'], allow_pickle=True)
-# Assuming output_ops is unpacked as: refImg, rmin, rmax, meanImg, offsets, ...
-# offsets is usually a list/tuple: [yoff, xoff, corr]
-yoff = output_ops[4][0]
-xoff = output_ops[4][1]
+output_ops = np.load(motion_result['output_ops_path'], allow_pickle=True).item()
+
+yoff = output_ops['yoff']
+xoff = output_ops['xoff']
+corr = output_ops['corrXY'] # This is the registration correlation per frame
 
 fig = plt.figure(figsize=(12, 4))
 plt.plot(xoff, label='X offset', alpha=0.7)
@@ -260,8 +260,8 @@ export_visualization_video(
 #%% Crop the motion-corrected movie to the stable region
 
 # Extract yrange and xrange from the end of the tuple
-yrange = output_ops[-2] 
-xrange = output_ops[-1] 
+yrange = output_ops['yrange'] 
+xrange = output_ops['xrange'] 
 
 # Apply the crop to your corrected movie
 # Format: movie[frames, y_start:y_end, x_start:x_end]

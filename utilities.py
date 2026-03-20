@@ -11,6 +11,8 @@ from scipy.signal import find_peaks
 from scipy import stats
 from tqdm import tqdm
 import pandas as pd
+import torch
+
 
 def load_experiment_metadata(db_csv_path, series_id_value):
     df = pd.read_csv(db_csv_path)
@@ -392,18 +394,25 @@ def run_motion_correction_suite2p(
 
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_reg_file = os.path.join(temp_dir, 'temp_reg.bin')
+        # 1. Directly write the array to disk. 
+        # This bypasses all suite2p 'write' naming bugs.
+        to_correct_data.tofile(temp_reg_file)
+
         f_reg = suite2p.io.BinaryFile(
             Ly=ly,
             Lx=lx,
             filename=temp_reg_file,
             n_frames=n_frames,
             dtype=dtype,
+            write=True,
         )
-
+        device = torch.device("cuda") if torch.cuda.is_available() else torch.device("cpu")
         output_ops = suite2p.registration.registration_wrapper(
             f_reg=f_reg,
-            f_raw=to_correct_data,
-            ops=motion_ops_profile,
+            f_raw=None,  
+            save_path=temp_dir,
+            settings=motion_ops_profile,
+            device=device
         )
 
         corrected_movie = np.memmap(temp_reg_file, dtype=dtype, mode='r', shape=(n_frames, ly, lx))
