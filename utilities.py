@@ -419,6 +419,10 @@ def run_motion_correction_suite2p(
         reg_npy = os.path.join(save_path, f'{series_id}_corrected.npy')
         np.save(reg_npy, corrected_movie)
 
+        # windows fix
+        del f_reg
+        del corrected_movie
+
     motion_input_ops_path = os.path.join(save_path, 'motion_input_ops.npy') # input ops for motion correction
     motion_output_ops_path = os.path.join(save_path, 'motion_output_ops.npy') # output ops for motion correction
     np.save(motion_input_ops_path, motion_ops_profile)

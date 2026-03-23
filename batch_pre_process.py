@@ -14,12 +14,12 @@ from batch_utilities import (
 
 
 #%% Adjust the following depending on the experiment
-# server_dir = "W:"
-server_dir = "/Volumes/tungsten"
+server_dir = "W:"
+# server_dir = "/Volumes/tungsten"
 
 base_dir = os.path.join(server_dir, 'scratch','gfelsenb', 'Ana', '2p-imaging', 'burak')
 container_id = '2026_03_Beta1_counterconditioned_dendrites'
-day_ids = ['2026_02_11']
+day_ids = ['2025_12_12', '2025_12_16', '2026_02_17']
 
 downsampled_fr = 6.0
 data_width = 750  # Hard-coded: .ini does not provide image width
@@ -83,6 +83,8 @@ for day_id in day_ids:
 
         # Motion correction parameters — adjust per experiment type
         motion_ops_profile = default_ops()
+        
+
         motion_ops_profile['fs'] = downsampled_fr
         motion_ops_profile['nonrigid'] = False
         motion_ops_profile['block_size'] = (128, 128)
