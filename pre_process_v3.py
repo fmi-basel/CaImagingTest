@@ -564,7 +564,6 @@ if len(all_durations) > 0 and n_rois > 0:
         downsampled_fr=downsampled_fr,
         series_id=series_id,
         series_meta=series_meta,
-        roi_responsive_df=None,
         roi_trial_plot_dir=roi_trial_plot_dir,
         pre_window_frames=pre_window_frames,
         post_window_frames=post_window_frames,

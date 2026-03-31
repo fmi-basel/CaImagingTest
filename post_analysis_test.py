@@ -5,7 +5,9 @@ import matplotlib.pyplot as plt
 import pickle
 import numpy as np
 import pandas as pd
-from scipy.stats import mannwhitneyu
+import seaborn as sns
+from scipy import integrate
+from scipy.stats import mannwhitneyu, kruskal, f_oneway, wilcoxon as wilcoxon_paired
 from helpers_figures import plot_fly_trial_panels, plot_group_identity_boxplots
 from postUtils import (
     normalize_odor_name,
@@ -19,7 +21,7 @@ from utilities import load_experiment_metadata
 
 #%%
 main_dir = "/Volumes/tungsten/scratch/gfelsenb/Ana/2p-imaging/burak/"
-container_id = '2026_02_Alpha3_dendrites'
+container_id = '2025_10_Gamma1_CC_extinction'
 
 experiment_dir = os.path.join(main_dir, container_id)  # Update this path accordingly
 processed_data_dir = os.path.join(main_dir, container_id, f'{container_id}_processed_data')
@@ -47,6 +49,9 @@ roi_avg_response_by_odor_norm_dict = {}
 roi_trial_pass_dict = {}
 roi_trial_plot_windows = {}
 roi_trial_plot_windows_norm = {}
+roi_trial_post_stim_response_dict = {}
+roi_avg_post_stim_response_by_odor_dict = {}
+roi_avg_post_stim_response_by_odor_norm_dict = {}
 alpha_response = 0.05
 
 
@@ -89,6 +94,8 @@ for p_file in processed_data_files:
         trial_pass_by_odor = {}
         avg_response_by_odor = {}
         trial_plot_windows_by_odor = {}
+        trial_post_stim_response_by_odor = {}
+        avg_post_stim_response_by_odor = {}
         all_trial_pass_flags = []
 
         if isinstance(single_trial_ctx, dict):
@@ -122,10 +129,12 @@ for p_file in processed_data_files:
                 trial_responses = []
                 trial_is_pass = []
                 trial_windows = []
+                trial_post_stim_responses = []
                 for trial_index, trial_trace in enumerate(trial_traces):
                     trace_array = np.asarray(trial_trace, dtype=float)
                     if trace_array.size == 0:
                         trial_responses.append(np.nan)
+                        trial_post_stim_responses.append(np.nan)
                         trial_is_pass.append(False)
                         trial_windows.append(
                             {
@@ -166,6 +175,7 @@ for p_file in processed_data_files:
 
                     if stim_segment.size == 0 or context_segment.size == 0:
                         trial_responses.append(np.nan)
+                        trial_post_stim_responses.append(np.nan)
                         trial_is_pass.append(False)
                         trial_windows.append(
                             {
@@ -178,22 +188,42 @@ for p_file in processed_data_files:
                             }
                         )
                         continue
-
+                    
+                    # Mean of stimulus segment minus mean of context segment as response value
                     stim_mean = np.nanmean(stim_segment)
                     context_mean = np.nanmean(context_segment)
+
+                    # AUC calculation
+                    stim_auc = integrate.trapezoid(stim_segment)
+                    context_auc = integrate.trapezoid(context_segment)
+
+                    # Response calculation using mean
                     response_value = float(stim_mean - context_mean)
+
+                    # Response calculation using AUC
+                    # response_value = float(stim_auc - context_auc)
+
+                    # Post-stimulus response: mean of trace after stim end, baseline-subtracted
+                    post_stim_segment = trace_array[stim_end:]
+                    post_stim_segment = post_stim_segment[np.isfinite(post_stim_segment)]
+                    if post_stim_segment.size == 0:
+                        post_stim_response_value = np.nan
+                    else:
+                        post_stim_response_value = float(np.nanmean(post_stim_segment) - context_mean)
+
                     trace_array_adjusted = trace_array - context_mean
 
                     p_value = np.nan
                     try:
-                        test_result = mannwhitneyu(stim_segment, context_segment, alternative='greater')
+                        test_result = mannwhitneyu(stim_segment, context_segment, alternative='two-sided')
                         p_value = float(test_result.pvalue)
                     except ValueError:
                         p_value = np.nan
 
-                    is_pass_trial = bool(np.isfinite(p_value) and p_value < alpha_response and response_value > 0)
+                    is_pass_trial = bool(np.isfinite(p_value) and p_value < alpha_response)
 
                     trial_responses.append(response_value)
+                    trial_post_stim_responses.append(post_stim_response_value)
                     trial_is_pass.append(is_pass_trial)
                     trial_windows.append(
                         {
@@ -209,12 +239,18 @@ for p_file in processed_data_files:
                 trial_response_by_odor[stimulus_key] = trial_responses
                 trial_pass_by_odor[stimulus_key] = trial_is_pass
                 trial_plot_windows_by_odor[stimulus_key] = trial_windows
+                trial_post_stim_response_by_odor[stimulus_key] = trial_post_stim_responses
                 all_trial_pass_flags.extend(trial_is_pass)
 
                 if len(trial_responses) == 0:
                     avg_response_by_odor[stimulus_key] = np.nan
                 else:
                     avg_response_by_odor[stimulus_key] = float(np.nanmean(np.asarray(trial_responses, dtype=float)))
+
+                if len(trial_post_stim_responses) == 0:
+                    avg_post_stim_response_by_odor[stimulus_key] = np.nan
+                else:
+                    avg_post_stim_response_by_odor[stimulus_key] = float(np.nanmean(np.asarray(trial_post_stim_responses, dtype=float)))
 
         if len(all_trial_pass_flags) == 0:
             responsiveness_index = np.nan
@@ -273,12 +309,16 @@ for p_file in processed_data_files:
 
         trial_response_by_odor_norm = {}
         avg_response_by_odor_norm = {}
+        trial_post_stim_response_by_odor_norm = {}
+        avg_post_stim_response_by_odor_norm = {}
         for odor_key, norm_trial_windows_list in trial_plot_windows_norm_by_odor.items():
             norm_trial_responses = []
+            norm_trial_post_stim_responses = []
             for window_info in norm_trial_windows_list:
                 trace_values = np.asarray(window_info.get('trace', np.array([], dtype=float)), dtype=float)
                 if trace_values.size == 0:
                     norm_trial_responses.append(np.nan)
+                    norm_trial_post_stim_responses.append(np.nan)
                     continue
 
                 stim_start = int(window_info.get('stim_start', 0))
@@ -298,9 +338,17 @@ for p_file in processed_data_files:
 
                 if stim_segment.size == 0 or context_segment.size == 0:
                     norm_trial_responses.append(np.nan)
+                    norm_trial_post_stim_responses.append(np.nan)
                     continue
 
                 norm_trial_responses.append(float(np.nanmean(stim_segment) - np.nanmean(context_segment)))
+
+                post_stim_segment_norm = trace_values[stim_end:]
+                post_stim_segment_norm = post_stim_segment_norm[np.isfinite(post_stim_segment_norm)]
+                if post_stim_segment_norm.size == 0:
+                    norm_trial_post_stim_responses.append(np.nan)
+                else:
+                    norm_trial_post_stim_responses.append(float(np.nanmean(post_stim_segment_norm) - np.nanmean(context_segment)))
 
             trial_response_by_odor_norm[odor_key] = norm_trial_responses
             if len(norm_trial_responses) == 0:
@@ -308,10 +356,19 @@ for p_file in processed_data_files:
             else:
                 avg_response_by_odor_norm[odor_key] = float(np.nanmean(np.asarray(norm_trial_responses, dtype=float)))
 
+            trial_post_stim_response_by_odor_norm[odor_key] = norm_trial_post_stim_responses
+            if len(norm_trial_post_stim_responses) == 0:
+                avg_post_stim_response_by_odor_norm[odor_key] = np.nan
+            else:
+                avg_post_stim_response_by_odor_norm[odor_key] = float(np.nanmean(np.asarray(norm_trial_post_stim_responses, dtype=float)))
+
         roi_trial_plot_windows_norm[roi_unique_name] = trial_plot_windows_norm_by_odor
         roi_trial_response_norm_dict[roi_unique_name] = trial_response_by_odor_norm
         roi_avg_response_by_odor_dict[roi_unique_name] = avg_response_by_odor
         roi_avg_response_by_odor_norm_dict[roi_unique_name] = avg_response_by_odor_norm
+        roi_trial_post_stim_response_dict[roi_unique_name] = trial_post_stim_response_by_odor
+        roi_avg_post_stim_response_by_odor_dict[roi_unique_name] = avg_post_stim_response_by_odor
+        roi_avg_post_stim_response_by_odor_norm_dict[roi_unique_name] = avg_post_stim_response_by_odor_norm
 
         roi_rows.append(
             {
@@ -351,6 +408,9 @@ print(f"Built ROI trial-pass dictionary with {len(roi_trial_pass_dict)} entries.
 print(f"Built ROI normalized trial-trace dictionary with {len(roi_trial_plot_windows_norm)} entries.")
 print(f"Built ROI odor-averaged response dictionary with {len(roi_avg_response_by_odor_dict)} entries.")
 print(f"Built ROI normalized odor-averaged response dictionary with {len(roi_avg_response_by_odor_norm_dict)} entries.")
+print(f"Built ROI post-stimulus response dictionary with {len(roi_trial_post_stim_response_dict)} entries.")
+print(f"Built ROI post-stimulus odor-averaged response dictionary with {len(roi_avg_post_stim_response_by_odor_dict)} entries.")
+print(f"Built ROI normalized post-stimulus odor-averaged response dictionary with {len(roi_avg_post_stim_response_by_odor_norm_dict)} entries.")
 
 fly_responsive_df = (
     roi_database
@@ -368,34 +428,34 @@ print(
 )
 
 
-print(f"Plotting responsive flies: {len(responsive_fly_ids)}")
-plot_fly_trial_panels(
-    responsive_fly_ids,
-    status_label='PASS FILTER',
-    roi_database_all=roi_database_all,
-    roi_trial_plot_windows=roi_trial_plot_windows,
-    pass_fail_dir=pass_fail_dir,
-    normalize_odor_name=normalize_odor_name,
-    safe_filename=safe_filename,
-)
+# print(f"Plotting responsive flies: {len(responsive_fly_ids)}")
+# plot_fly_trial_panels(
+#     responsive_fly_ids,
+#     status_label='PASS FILTER',
+#     roi_database_all=roi_database_all,
+#     roi_trial_plot_windows=roi_trial_plot_windows,
+#     pass_fail_dir=pass_fail_dir,
+#     normalize_odor_name=normalize_odor_name,
+#     safe_filename=safe_filename,
+# )
 
-print(f"Plotting non-responsive flies: {len(nonresponsive_fly_ids)}")
-plot_fly_trial_panels(
-    nonresponsive_fly_ids,
-    status_label='FAIL FILTER',
-    roi_database_all=roi_database_all,
-    roi_trial_plot_windows=roi_trial_plot_windows,
-    pass_fail_dir=pass_fail_dir,
-    normalize_odor_name=normalize_odor_name,
-    safe_filename=safe_filename,
-)
+# print(f"Plotting non-responsive flies: {len(nonresponsive_fly_ids)}")
+# plot_fly_trial_panels(
+#     nonresponsive_fly_ids,
+#     status_label='FAIL FILTER',
+#     roi_database_all=roi_database_all,
+#     roi_trial_plot_windows=roi_trial_plot_windows,
+#     pass_fail_dir=pass_fail_dir,
+#     normalize_odor_name=normalize_odor_name,
+#     safe_filename=safe_filename,
+# )
 
 roi_database.head()
 
    
 
 # %%
-colors_hex = {'MCH': '#d95f02', 'OCTT': "#7570b3", "IAA": '#999999'}
+colors_hex = {'MCH': '#d7191c', 'OCTT': "#e6b800", "IAA": '#a6d96a', 'CSp': '#d95f02', 'CSm': "#7570b3", 'Novel': '#999999'}
 roi_identity_rows = []
 
 for _, roi_row in roi_database.iterrows():
@@ -441,41 +501,119 @@ for _, roi_row in roi_database.iterrows():
 
 roi_identity_df = pd.DataFrame(roi_identity_rows)
 
+# %%
+# --- Statistical analysis for response boxplots ---
+# Available test keys for plot annotation:
+#   'wilcoxon_p'          — paired Wilcoxon (within-ROI), uncorrected
+#   'wilcoxon_p_bonf'     — paired Wilcoxon, Bonferroni-corrected
+#   'mannwhitney_p'       — Mann-Whitney U (independent samples), uncorrected
+#   'mannwhitney_p_bonf'  — Mann-Whitney U, Bonferroni-corrected
+annotation_test_key = 'wilcoxon_p_bonf' # HERE PICK WHICH ONE YOU WANT TO BE PLOTTED
 
-if roi_identity_df.empty:
-    print("No ROI identity responses available for group-level plotting.")
-else:
+_odor_pairs = [('CSp', 'CSm')]
+_n_comparisons = len(_odor_pairs)  # Bonferroni correction factor
+
+# Build subsets: all groups combined + per-CSp-odor subsets
+_bp_subsets = [
+    (
+        'all',
+        roi_identity_df,
+        roi_database,
+        None,
+        'ROI averaged responses by group and odor identity',
+        os.path.join(results_dir, f"{safe_filename(container_id)}_roi_group_boxplots.png"),
+    ),
+]
+for _cspt in ['MCH', 'OCTT', 'IAA']:
+    _names_csp = set(roi_database.loc[roi_database['CSp'].apply(normalize_odor_name) == _cspt, 'roi_unique_name'])
+    _bp_subsets.append((
+        _cspt,
+        roi_identity_df.loc[roi_identity_df['roi_unique_name'].isin(_names_csp)].copy(),
+        roi_database.loc[roi_database['roi_unique_name'].isin(_names_csp)].copy(),
+        _cspt,
+        f"ROI responses by group (CSp = {_cspt})",
+        os.path.join(results_dir, f"{safe_filename(container_id)}_roi_group_boxplots_csp_{safe_filename(_cspt)}.png"),
+    ))
+
+bp_stats_results = {}
+for _lbl, _id_df, _db_df, _csp_od, _ttl, _opath in _bp_subsets:
+    if _id_df.empty:
+        continue
+    print(f"\n{'='*60}\nStats: {_ttl}")
+    _stats_ann, _omni = {}, {}
+    for _grp, _gdf in _id_df.groupby('group'):
+        _arrs = {od: _gdf.loc[_gdf['odor_identity'] == od, 'response'].dropna().to_numpy(dtype=float) for od in ['CSp', 'CSm', 'Novel']}
+
+        # Omnibus: Kruskal-Wallis (non-parametric)
+        _kw_stat, _kw_p = np.nan, np.nan
+        if all(a.size >= 2 for a in _arrs.values()):
+            try: _kw_stat, _kw_p = kruskal(*_arrs.values())
+            except ValueError: pass
+
+        # Omnibus: one-way ANOVA (parametric)
+        _an_stat, _an_p = np.nan, np.nan
+        if all(a.size >= 2 for a in _arrs.values()):
+            try: _an_stat, _an_p = f_oneway(*_arrs.values())
+            except ValueError: pass
+
+        print(f"\n  Group: {_grp}")
+        print(f"    Kruskal-Wallis: H={_kw_stat:.3g}, p={_kw_p:.4g}  {pvalue_to_stars(_kw_p)}")
+        print(f"    One-way ANOVA:  F={_an_stat:.3g}, p={_an_p:.4g}  {pvalue_to_stars(_an_p)}")
+        _omni[_grp] = {
+            'kruskal': {'statistic': float(_kw_stat), 'pvalue': float(_kw_p)},
+            'anova':   {'statistic': float(_an_stat), 'pvalue': float(_an_p)},
+        }
+
+        # Post-hoc pairwise tests
+        _pv = _gdf.pivot_table(index='roi_unique_name', columns='odor_identity', values='response', aggfunc='mean')
+        _pair_res = {}
+        for _oa, _ob in _odor_pairs:
+            # Paired Wilcoxon signed-rank (within-ROI)
+            _wil_p = np.nan
+            if _oa in _pv.columns and _ob in _pv.columns:
+                _pd2 = _pv[[_oa, _ob]].dropna()
+                if len(_pd2) >= 2:
+                    try: _wil_p = float(wilcoxon_paired(_pd2[_oa].to_numpy(dtype=float), _pd2[_ob].to_numpy(dtype=float), alternative='two-sided', zero_method='wilcox').pvalue)
+                    except ValueError: pass
+            # Mann-Whitney U (independent samples)
+            _mwu_p = np.nan
+            if _arrs[_oa].size >= 2 and _arrs[_ob].size >= 2:
+                try: _mwu_p = float(mannwhitneyu(_arrs[_oa], _arrs[_ob], alternative='two-sided').pvalue)
+                except ValueError: pass
+            _wil_bonf = min(1.0, _wil_p * _n_comparisons) if np.isfinite(_wil_p) else np.nan
+            _mwu_bonf = min(1.0, _mwu_p * _n_comparisons) if np.isfinite(_mwu_p) else np.nan
+            _pair_res[(_oa, _ob)] = {
+                'wilcoxon_p':        _wil_p,    'wilcoxon_p_bonf':   _wil_bonf,
+                'mannwhitney_p':     _mwu_p,    'mannwhitney_p_bonf': _mwu_bonf,
+            }
+            print(f"    {_oa} vs {_ob}:")
+            print(f"      Wilcoxon paired:  p={_wil_p:.4g}  [ Bonferroni: p={_wil_bonf:.4g}  {pvalue_to_stars(_wil_bonf)} ]")
+            print(f"      Mann-Whitney U:   p={_mwu_p:.4g}  [ Bonferroni: p={_mwu_bonf:.4g}  {pvalue_to_stars(_mwu_bonf)} ]")
+        _stats_ann[_grp] = _pair_res
+    bp_stats_results[_lbl] = {'annotations': _stats_ann, 'omnibus': _omni}
+
+# %%
+# --- Boxplots (non-normalized) ---
+for _lbl, _id_df, _db_df, _csp_od, _ttl, _opath in _bp_subsets:
+    if _id_df.empty:
+        print(f"No data for: {_ttl}")
+        continue
+    _grp_ann = {
+        gname: {pair: ps[annotation_test_key] for pair, ps in gstats.items()}
+        for gname, gstats in bp_stats_results.get(_lbl, {}).get('annotations', {}).items()
+    }
     plot_group_identity_boxplots(
-        roi_identity_subset=roi_identity_df,
-        roi_database_subset=roi_database,
-        figure_title='ROI averaged responses by group and odor identity',
-        output_path=os.path.join(results_dir, f"{safe_filename(container_id)}_roi_group_boxplots.png"),
+        roi_identity_subset=_id_df,
+        roi_database_subset=_db_df,
+        figure_title=_ttl,
+        output_path=_opath,
         normalize_odor_name=normalize_odor_name,
         colors_hex=colors_hex,
-        roi_avg_response_by_odor_dict=roi_avg_response_by_odor_dict,
         pvalue_to_stars=pvalue_to_stars,
+        csp_odor=_csp_od,
+        stats_annotations=_grp_ann,
+        omnibus_stats=bp_stats_results.get(_lbl, {}).get('omnibus', {}),
     )
-
-    for csp_target in ['MCH', 'OCTT']:
-        roi_names_for_csp = set(
-            roi_database.loc[
-                roi_database['CSp'].apply(normalize_odor_name) == csp_target,
-                'roi_unique_name',
-            ]
-        )
-        roi_db_subset = roi_database.loc[roi_database['roi_unique_name'].isin(roi_names_for_csp)].copy()
-        roi_identity_subset = roi_identity_df.loc[roi_identity_df['roi_unique_name'].isin(roi_names_for_csp)].copy()
-
-        plot_group_identity_boxplots(
-            roi_identity_subset=roi_identity_subset,
-            roi_database_subset=roi_db_subset,
-            figure_title=f"ROI responses by group (CSp = {csp_target})",
-            output_path=os.path.join(results_dir, f"{safe_filename(container_id)}_roi_group_boxplots_csp_{safe_filename(csp_target)}.png"),
-            normalize_odor_name=normalize_odor_name,
-            colors_hex=colors_hex,
-            roi_avg_response_by_odor_dict=roi_avg_response_by_odor_dict,
-            pvalue_to_stars=pvalue_to_stars,
-        )
 
 roi_identity_rows_norm = []
 
@@ -492,20 +630,18 @@ for _, roi_row in roi_database.iterrows():
 
     normalized_odor_values_norm = {}
     for odor_name, response_value in odor_response_dict_norm.items():
-        odor_norm = normalize_odor_name(odor_name)
-        if odor_norm is None:
-            continue
-        normalized_odor_values_norm.setdefault(odor_norm, []).append(response_value)
 
-    csp_norm = normalize_odor_name(roi_row.get('CSp'))
-    csm_norm = normalize_odor_name(roi_row.get('CSm'))
+        normalized_odor_values_norm.setdefault(odor_name, []).append(response_value)
 
-    csp_values_norm = normalized_odor_values_norm.get(csp_norm, []) if csp_norm is not None else []
-    csm_values_norm = normalized_odor_values_norm.get(csm_norm, []) if csm_norm is not None else []
+    csp_name = roi_row.get('CSp')
+    csm_name = roi_row.get('CSm')
+
+    csp_values_norm = normalized_odor_values_norm.get(csp_name, []) if csp_name is not None else []
+    csm_values_norm = normalized_odor_values_norm.get(csm_name, []) if csm_name is not None else []
 
     novel_values_norm = []
-    for odor_norm, values in normalized_odor_values_norm.items():
-        if odor_norm in {csp_norm, csm_norm}:
+    for odor_name, values in normalized_odor_values_norm.items():
+        if odor_name in {csp_name, csm_name}:
             continue
         novel_values_norm.extend(values)
 
@@ -521,9 +657,66 @@ for _, roi_row in roi_database.iterrows():
 
 
 roi_identity_df_norm = pd.DataFrame(roi_identity_rows_norm)
-if roi_identity_df_norm.empty:
-    print("No normalized ROI identity responses available for group-level plotting.")
-else:
+
+# %%
+# --- Statistical analysis for normalized boxplots ---
+bp_norm_stats = {'annotations': {}, 'omnibus': {}}
+if not roi_identity_df_norm.empty:
+    print(f"\n{'='*60}\nStats: Normalized ROI averaged responses by group and odor identity")
+    for _grp, _gdf in roi_identity_df_norm.groupby('group'):
+        _arrs = {od: _gdf.loc[_gdf['odor_identity'] == od, 'response'].dropna().to_numpy(dtype=float) for od in ['CSp', 'CSm', 'Novel']}
+
+        # Omnibus: Kruskal-Wallis
+        _kw_stat, _kw_p = np.nan, np.nan
+        if all(a.size >= 2 for a in _arrs.values()):
+            try: _kw_stat, _kw_p = kruskal(*_arrs.values())
+            except ValueError: pass
+
+        # Omnibus: one-way ANOVA
+        _an_stat, _an_p = np.nan, np.nan
+        if all(a.size >= 2 for a in _arrs.values()):
+            try: _an_stat, _an_p = f_oneway(*_arrs.values())
+            except ValueError: pass
+
+        print(f"\n  Group: {_grp}")
+        print(f"    Kruskal-Wallis: H={_kw_stat:.3g}, p={_kw_p:.4g}  {pvalue_to_stars(_kw_p)}")
+        print(f"    One-way ANOVA:  F={_an_stat:.3g}, p={_an_p:.4g}  {pvalue_to_stars(_an_p)}")
+        bp_norm_stats['omnibus'][_grp] = {
+            'kruskal': {'statistic': float(_kw_stat), 'pvalue': float(_kw_p)},
+            'anova':   {'statistic': float(_an_stat), 'pvalue': float(_an_p)},
+        }
+
+        _pv = _gdf.pivot_table(index='roi_unique_name', columns='odor_identity', values='response', aggfunc='mean')
+        _pair_res = {}
+        for _oa, _ob in _odor_pairs:
+            _wil_p = np.nan
+            if _oa in _pv.columns and _ob in _pv.columns:
+                _pd2 = _pv[[_oa, _ob]].dropna()
+                if len(_pd2) >= 2:
+                    try: _wil_p = float(wilcoxon_paired(_pd2[_oa].to_numpy(dtype=float), _pd2[_ob].to_numpy(dtype=float), alternative='two-sided', zero_method='wilcox').pvalue)
+                    except ValueError: pass
+            _mwu_p = np.nan
+            if _arrs[_oa].size >= 2 and _arrs[_ob].size >= 2:
+                try: _mwu_p = float(mannwhitneyu(_arrs[_oa], _arrs[_ob], alternative='two-sided').pvalue)
+                except ValueError: pass
+            _wil_bonf = min(1.0, _wil_p * _n_comparisons) if np.isfinite(_wil_p) else np.nan
+            _mwu_bonf = min(1.0, _mwu_p * _n_comparisons) if np.isfinite(_mwu_p) else np.nan
+            _pair_res[(_oa, _ob)] = {
+                'wilcoxon_p':        _wil_p,    'wilcoxon_p_bonf':   _wil_bonf,
+                'mannwhitney_p':     _mwu_p,    'mannwhitney_p_bonf': _mwu_bonf,
+            }
+            print(f"    {_oa} vs {_ob}:")
+            print(f"      Wilcoxon paired:  p={_wil_p:.4g}  [ Bonferroni: p={_wil_bonf:.4g}  {pvalue_to_stars(_wil_bonf)} ]")
+            print(f"      Mann-Whitney U:   p={_mwu_p:.4g}  [ Bonferroni: p={_mwu_bonf:.4g}  {pvalue_to_stars(_mwu_bonf)} ]")
+        bp_norm_stats['annotations'][_grp] = _pair_res
+
+# %%
+# --- Boxplots (normalized) ---
+if not roi_identity_df_norm.empty:
+    _grp_ann_norm = {
+        gname: {pair: ps[annotation_test_key] for pair, ps in gstats.items()}
+        for gname, gstats in bp_norm_stats['annotations'].items()
+    }
     plot_group_identity_boxplots(
         roi_identity_subset=roi_identity_df_norm,
         roi_database_subset=roi_database,
@@ -531,13 +724,349 @@ else:
         output_path=os.path.join(results_dir, f"{safe_filename(container_id)}_normalized_roi_group_boxplots.png"),
         normalize_odor_name=normalize_odor_name,
         colors_hex=colors_hex,
-        roi_avg_response_by_odor_dict=roi_avg_response_by_odor_dict,
         pvalue_to_stars=pvalue_to_stars,
+        stats_annotations=_grp_ann_norm,
+        omnibus_stats=bp_norm_stats['omnibus'],
     )
 
 
 # %%
+# --- Post-stimulus response analysis ---
+roi_post_stim_identity_rows = []
+
+for _, roi_row in roi_database.iterrows():
+    roi_name = roi_row['roi_unique_name']
+    group_name = roi_row.get('group')
+
+    if pd.isna(group_name):
+        continue
+
+    odor_post_stim_dict = roi_avg_post_stim_response_by_odor_dict.get(roi_name, {})
+    if not isinstance(odor_post_stim_dict, dict) or len(odor_post_stim_dict) == 0:
+        continue
+
+    normalized_odor_values = {}
+    for odor_name, response_value in odor_post_stim_dict.items():
+        odor_norm = normalize_odor_name(odor_name)
+        if odor_norm is None:
+            continue
+        normalized_odor_values.setdefault(odor_norm, []).append(response_value)
+
+    csp_norm = normalize_odor_name(roi_row.get('CSp'))
+    csm_norm = normalize_odor_name(roi_row.get('CSm'))
+
+    csp_values = normalized_odor_values.get(csp_norm, []) if csp_norm is not None else []
+    csm_values = normalized_odor_values.get(csm_norm, []) if csm_norm is not None else []
+
+    novel_values = []
+    for odor_norm, values in normalized_odor_values.items():
+        if odor_norm in {csp_norm, csm_norm}:
+            continue
+        novel_values.extend(values)
+
+    csp_response = float(np.nanmean(np.asarray(csp_values, dtype=float))) if len(csp_values) else np.nan
+    csm_response = float(np.nanmean(np.asarray(csm_values, dtype=float))) if len(csm_values) else np.nan
+    novel_response = float(np.nanmean(np.asarray(novel_values, dtype=float))) if len(novel_values) else np.nan
+
+    roi_post_stim_identity_rows.extend([
+        {'group': group_name, 'flyID': roi_row.get('flyID'), 'roi_unique_name': roi_name, 'odor_identity': 'CSp', 'response': csp_response},
+        {'group': group_name, 'flyID': roi_row.get('flyID'), 'roi_unique_name': roi_name, 'odor_identity': 'CSm', 'response': csm_response},
+        {'group': group_name, 'flyID': roi_row.get('flyID'), 'roi_unique_name': roi_name, 'odor_identity': 'Novel', 'response': novel_response},
+    ])
+
+roi_post_stim_identity_df = pd.DataFrame(roi_post_stim_identity_rows)
+
+# %%
+# --- Statistical analysis for post-stimulus response boxplots ---
+_ps_bp_subsets = [
+    (
+        'all',
+        roi_post_stim_identity_df,
+        roi_database,
+        None,
+        'Post-stimulus ROI averaged responses by group and odor identity',
+        os.path.join(results_dir, f"{safe_filename(container_id)}_roi_group_boxplots_post_stim.png"),
+    ),
+]
+for _cspt in ['MCH', 'OCTT', 'IAA']:
+    _names_csp = set(roi_database.loc[roi_database['CSp'].apply(normalize_odor_name) == _cspt, 'roi_unique_name'])
+    _ps_bp_subsets.append((
+        _cspt,
+        roi_post_stim_identity_df.loc[roi_post_stim_identity_df['roi_unique_name'].isin(_names_csp)].copy(),
+        roi_database.loc[roi_database['roi_unique_name'].isin(_names_csp)].copy(),
+        _cspt,
+        f"Post-stimulus ROI responses by group (CSp = {_cspt})",
+        os.path.join(results_dir, f"{safe_filename(container_id)}_roi_group_boxplots_post_stim_csp_{safe_filename(_cspt)}.png"),
+    ))
+
+bp_post_stim_stats_results = {}
+for _lbl, _id_df, _db_df, _csp_od, _ttl, _opath in _ps_bp_subsets:
+    if _id_df.empty:
+        continue
+    print(f"\n{'='*60}\nStats: {_ttl}")
+    _stats_ann, _omni = {}, {}
+    for _grp, _gdf in _id_df.groupby('group'):
+        _arrs = {od: _gdf.loc[_gdf['odor_identity'] == od, 'response'].dropna().to_numpy(dtype=float) for od in ['CSp', 'CSm', 'Novel']}
+
+        _kw_stat, _kw_p = np.nan, np.nan
+        if all(a.size >= 2 for a in _arrs.values()):
+            try: _kw_stat, _kw_p = kruskal(*_arrs.values())
+            except ValueError: pass
+
+        _an_stat, _an_p = np.nan, np.nan
+        if all(a.size >= 2 for a in _arrs.values()):
+            try: _an_stat, _an_p = f_oneway(*_arrs.values())
+            except ValueError: pass
+
+        print(f"\n  Group: {_grp}")
+        print(f"    Kruskal-Wallis: H={_kw_stat:.3g}, p={_kw_p:.4g}  {pvalue_to_stars(_kw_p)}")
+        print(f"    One-way ANOVA:  F={_an_stat:.3g}, p={_an_p:.4g}  {pvalue_to_stars(_an_p)}")
+        _omni[_grp] = {
+            'kruskal': {'statistic': float(_kw_stat), 'pvalue': float(_kw_p)},
+            'anova':   {'statistic': float(_an_stat), 'pvalue': float(_an_p)},
+        }
+
+        _pv = _gdf.pivot_table(index='roi_unique_name', columns='odor_identity', values='response', aggfunc='mean')
+        _pair_res = {}
+        for _oa, _ob in _odor_pairs:
+            _wil_p = np.nan
+            if _oa in _pv.columns and _ob in _pv.columns:
+                _pd2 = _pv[[_oa, _ob]].dropna()
+                if len(_pd2) >= 2:
+                    try: _wil_p = float(wilcoxon_paired(_pd2[_oa].to_numpy(dtype=float), _pd2[_ob].to_numpy(dtype=float), alternative='two-sided', zero_method='wilcox').pvalue)
+                    except ValueError: pass
+            _mwu_p = np.nan
+            if _arrs[_oa].size >= 2 and _arrs[_ob].size >= 2:
+                try: _mwu_p = float(mannwhitneyu(_arrs[_oa], _arrs[_ob], alternative='two-sided').pvalue)
+                except ValueError: pass
+            _wil_bonf = min(1.0, _wil_p * _n_comparisons) if np.isfinite(_wil_p) else np.nan
+            _mwu_bonf = min(1.0, _mwu_p * _n_comparisons) if np.isfinite(_mwu_p) else np.nan
+            _pair_res[(_oa, _ob)] = {
+                'wilcoxon_p':        _wil_p,    'wilcoxon_p_bonf':   _wil_bonf,
+                'mannwhitney_p':     _mwu_p,    'mannwhitney_p_bonf': _mwu_bonf,
+            }
+            print(f"    {_oa} vs {_ob}:")
+            print(f"      Wilcoxon paired:  p={_wil_p:.4g}  [ Bonferroni: p={_wil_bonf:.4g}  {pvalue_to_stars(_wil_bonf)} ]")
+            print(f"      Mann-Whitney U:   p={_mwu_p:.4g}  [ Bonferroni: p={_mwu_bonf:.4g}  {pvalue_to_stars(_mwu_bonf)} ]")
+        _stats_ann[_grp] = _pair_res
+    bp_post_stim_stats_results[_lbl] = {'annotations': _stats_ann, 'omnibus': _omni}
+
+# %%
+# --- Boxplots (post-stimulus, non-normalized) ---
+for _lbl, _id_df, _db_df, _csp_od, _ttl, _opath in _ps_bp_subsets:
+    if _id_df.empty:
+        print(f"No data for: {_ttl}")
+        continue
+    _grp_ann = {
+        gname: {pair: ps[annotation_test_key] for pair, ps in gstats.items()}
+        for gname, gstats in bp_post_stim_stats_results.get(_lbl, {}).get('annotations', {}).items()
+    }
+    plot_group_identity_boxplots(
+        roi_identity_subset=_id_df,
+        roi_database_subset=_db_df,
+        figure_title=_ttl,
+        output_path=_opath,
+        normalize_odor_name=normalize_odor_name,
+        colors_hex=colors_hex,
+        pvalue_to_stars=pvalue_to_stars,
+        csp_odor=_csp_od,
+        stats_annotations=_grp_ann,
+        omnibus_stats=bp_post_stim_stats_results.get(_lbl, {}).get('omnibus', {}),
+    )
+
+# %%
+# --- Post-stimulus normalized response analysis ---
+roi_post_stim_identity_rows_norm = []
+
+for _, roi_row in roi_database.iterrows():
+    roi_name = roi_row['roi_unique_name']
+    group_name = roi_row.get('group')
+
+    if pd.isna(group_name):
+        continue
+
+    odor_post_stim_dict_norm = roi_avg_post_stim_response_by_odor_norm_dict.get(roi_name, {})
+    if not isinstance(odor_post_stim_dict_norm, dict) or len(odor_post_stim_dict_norm) == 0:
+        continue
+
+    normalized_odor_values_norm = {}
+    for odor_name, response_value in odor_post_stim_dict_norm.items():
+        normalized_odor_values_norm.setdefault(odor_name, []).append(response_value)
+
+    csp_name = roi_row.get('CSp')
+    csm_name = roi_row.get('CSm')
+
+    csp_values_norm = normalized_odor_values_norm.get(csp_name, []) if csp_name is not None else []
+    csm_values_norm = normalized_odor_values_norm.get(csm_name, []) if csm_name is not None else []
+
+    novel_values_norm = []
+    for odor_name, values in normalized_odor_values_norm.items():
+        if odor_name in {csp_name, csm_name}:
+            continue
+        novel_values_norm.extend(values)
+
+    csp_response_norm = float(np.nanmean(np.asarray(csp_values_norm, dtype=float))) if len(csp_values_norm) else np.nan
+    csm_response_norm = float(np.nanmean(np.asarray(csm_values_norm, dtype=float))) if len(csm_values_norm) else np.nan
+    novel_response_norm = float(np.nanmean(np.asarray(novel_values_norm, dtype=float))) if len(novel_values_norm) else np.nan
+
+    roi_post_stim_identity_rows_norm.extend([
+        {'group': group_name, 'flyID': roi_row.get('flyID'), 'roi_unique_name': roi_name, 'odor_identity': 'CSp', 'response': csp_response_norm},
+        {'group': group_name, 'flyID': roi_row.get('flyID'), 'roi_unique_name': roi_name, 'odor_identity': 'CSm', 'response': csm_response_norm},
+        {'group': group_name, 'flyID': roi_row.get('flyID'), 'roi_unique_name': roi_name, 'odor_identity': 'Novel', 'response': novel_response_norm},
+    ])
+
+roi_post_stim_identity_df_norm = pd.DataFrame(roi_post_stim_identity_rows_norm)
+
+# %%
+# --- Statistical analysis for normalized post-stimulus response boxplots ---
+bp_post_stim_norm_stats = {'annotations': {}, 'omnibus': {}}
+if not roi_post_stim_identity_df_norm.empty:
+    print(f"\n{'='*60}\nStats: Normalized post-stimulus ROI averaged responses by group and odor identity")
+    for _grp, _gdf in roi_post_stim_identity_df_norm.groupby('group'):
+        _arrs = {od: _gdf.loc[_gdf['odor_identity'] == od, 'response'].dropna().to_numpy(dtype=float) for od in ['CSp', 'CSm', 'Novel']}
+
+        _kw_stat, _kw_p = np.nan, np.nan
+        if all(a.size >= 2 for a in _arrs.values()):
+            try: _kw_stat, _kw_p = kruskal(*_arrs.values())
+            except ValueError: pass
+
+        _an_stat, _an_p = np.nan, np.nan
+        if all(a.size >= 2 for a in _arrs.values()):
+            try: _an_stat, _an_p = f_oneway(*_arrs.values())
+            except ValueError: pass
+
+        print(f"\n  Group: {_grp}")
+        print(f"    Kruskal-Wallis: H={_kw_stat:.3g}, p={_kw_p:.4g}  {pvalue_to_stars(_kw_p)}")
+        print(f"    One-way ANOVA:  F={_an_stat:.3g}, p={_an_p:.4g}  {pvalue_to_stars(_an_p)}")
+        bp_post_stim_norm_stats['omnibus'][_grp] = {
+            'kruskal': {'statistic': float(_kw_stat), 'pvalue': float(_kw_p)},
+            'anova':   {'statistic': float(_an_stat), 'pvalue': float(_an_p)},
+        }
+
+        _pv = _gdf.pivot_table(index='roi_unique_name', columns='odor_identity', values='response', aggfunc='mean')
+        _pair_res = {}
+        for _oa, _ob in _odor_pairs:
+            _wil_p = np.nan
+            if _oa in _pv.columns and _ob in _pv.columns:
+                _pd2 = _pv[[_oa, _ob]].dropna()
+                if len(_pd2) >= 2:
+                    try: _wil_p = float(wilcoxon_paired(_pd2[_oa].to_numpy(dtype=float), _pd2[_ob].to_numpy(dtype=float), alternative='two-sided', zero_method='wilcox').pvalue)
+                    except ValueError: pass
+            _mwu_p = np.nan
+            if _arrs[_oa].size >= 2 and _arrs[_ob].size >= 2:
+                try: _mwu_p = float(mannwhitneyu(_arrs[_oa], _arrs[_ob], alternative='two-sided').pvalue)
+                except ValueError: pass
+            _wil_bonf = min(1.0, _wil_p * _n_comparisons) if np.isfinite(_wil_p) else np.nan
+            _mwu_bonf = min(1.0, _mwu_p * _n_comparisons) if np.isfinite(_mwu_p) else np.nan
+            _pair_res[(_oa, _ob)] = {
+                'wilcoxon_p':        _wil_p,    'wilcoxon_p_bonf':   _wil_bonf,
+                'mannwhitney_p':     _mwu_p,    'mannwhitney_p_bonf': _mwu_bonf,
+            }
+            print(f"    {_oa} vs {_ob}:")
+            print(f"      Wilcoxon paired:  p={_wil_p:.4g}  [ Bonferroni: p={_wil_bonf:.4g}  {pvalue_to_stars(_wil_bonf)} ]")
+            print(f"      Mann-Whitney U:   p={_mwu_p:.4g}  [ Bonferroni: p={_mwu_bonf:.4g}  {pvalue_to_stars(_mwu_bonf)} ]")
+        bp_post_stim_norm_stats['annotations'][_grp] = _pair_res
+
+# %%
+# --- Boxplots (post-stimulus, normalized) ---
+if not roi_post_stim_identity_df_norm.empty:
+    _grp_ann_ps_norm = {
+        gname: {pair: ps[annotation_test_key] for pair, ps in gstats.items()}
+        for gname, gstats in bp_post_stim_norm_stats['annotations'].items()
+    }
+    plot_group_identity_boxplots(
+        roi_identity_subset=roi_post_stim_identity_df_norm,
+        roi_database_subset=roi_database,
+        figure_title='Normalized post-stimulus ROI averaged responses by group and odor identity',
+        output_path=os.path.join(results_dir, f"{safe_filename(container_id)}_normalized_roi_group_boxplots_post_stim.png"),
+        normalize_odor_name=normalize_odor_name,
+        colors_hex=colors_hex,
+        pvalue_to_stars=pvalue_to_stars,
+        stats_annotations=_grp_ann_ps_norm,
+        omnibus_stats=bp_post_stim_norm_stats['omnibus'],
+    )
+
+
+# %%
+# --- Response distribution histograms ---
+# Subsets: all groups combined, then per-CSp-odor
 odor_order = ['CSp', 'CSm', 'Novel']
+
+_hist_subsets = [
+    (
+        'all',
+        roi_identity_df_norm,
+        None,
+        'ROI response distributions by group and odor identity',
+        os.path.join(results_dir, f"{safe_filename(container_id)}_response_histograms.png"),
+    ),
+]
+for _cspt in ['MCH', 'OCTT', 'IAA']:
+    _names_csp_h = set(roi_database.loc[roi_database['CSp'].apply(normalize_odor_name) == _cspt, 'roi_unique_name'])
+    _hist_subsets.append((
+        _cspt,
+        roi_identity_df_norm.loc[roi_identity_df_norm['roi_unique_name'].isin(_names_csp_h)].copy(),
+        _cspt,
+        f"ROI response distributions (CSp = {_cspt})",
+        os.path.join(results_dir, f"{safe_filename(container_id)}_response_histograms_csp_{safe_filename(_cspt)}.png"),
+    ))
+
+for _lbl_h, _id_df_h, _csp_od_h, _ttl_h, _opath_h in _hist_subsets:
+    if _id_df_h.empty:
+        print(f"No data for histogram: {_ttl_h}")
+        continue
+
+    _groups_h = sorted(_id_df_h['group'].dropna().unique())
+    _n_grp = len(_groups_h)
+    if _n_grp == 0:
+        continue
+
+    # Determine x-axis range shared across all groups for comparability
+    _all_vals = _id_df_h['response'].dropna().to_numpy(dtype=float)
+    _x_min = float(np.nanpercentile(_all_vals, 1)) if _all_vals.size > 0 else -0.5
+    _x_max = float(np.nanpercentile(_all_vals, 99)) if _all_vals.size > 0 else 1.5
+
+    # Box color logic (same as boxplots: odor-specific when CSp is fixed, identity-based otherwise)
+    if _csp_od_h is not None:
+        _csm_col_h = roi_database.loc[roi_database['CSp'].apply(normalize_odor_name) == _csp_od_h, 'CSm'].dropna()
+        _csm_od_h = normalize_odor_name(_csm_col_h.iloc[0]) if not _csm_col_h.empty else None
+        _identity_keys_h = {'CSp', 'CSm', 'Novel'}
+        _novel_od_h = next((k for k in colors_hex if k not in _identity_keys_h and k != _csp_od_h and k != _csm_od_h), None)
+        _hist_colors = {
+            'CSp':   colors_hex.get(_csp_od_h, '#999999'),
+            'CSm':   colors_hex.get(_csm_od_h, '#999999'),
+            'Novel': colors_hex.get(_novel_od_h, '#999999'),
+        }
+    else:
+        _hist_colors = {od: colors_hex.get(od, '#999999') for od in odor_order}
+
+    fig_h, axes_h = plt.subplots(1, _n_grp, figsize=(3.8 * _n_grp, 3.2), sharey=False, squeeze=False)
+
+    for _col, _grp_h in enumerate(_groups_h):
+        ax = axes_h[0, _col]
+        _gdf_h = _id_df_h.loc[_id_df_h['group'] == _grp_h]
+
+        for _oi in odor_order:
+            _vals = _gdf_h.loc[_gdf_h['odor_identity'] == _oi, 'response'].dropna().to_numpy(dtype=float)
+            if _vals.size == 0:
+                continue
+            _col_h = _hist_colors.get(_oi, '#999999')
+            sns.kdeplot(_vals, ax=ax, color=_col_h, fill=True, alpha=0.35, linewidth=1.8, label=f"{_oi} (n={_vals.size})", clip=(_x_min, _x_max))
+
+        ax.axvline(0, color='k', lw=0.8, ls='--')
+        ax.set_title(f"Group: {_grp_h}", fontsize=9)
+        ax.set_xlabel('ΔF/F response')
+        if _col == 0:
+            ax.set_ylabel('Density')
+        ax.legend(fontsize=7)
+        ax.grid(axis='y', alpha=0.25)
+
+    fig_h.suptitle(_ttl_h, y=1.02)
+    plt.tight_layout()
+    fig_h.savefig(_opath_h, dpi=200, bbox_inches='tight')
+    plt.show()
+
+# %%
 roi_trace_identity_rows = []
 
 for _, roi_row in roi_database.iterrows():
@@ -559,14 +1088,14 @@ for _, roi_row in roi_database.iterrows():
     if not isinstance(roi_odor_windows, dict) or len(roi_odor_windows) == 0:
         continue
 
-    csp_norm = normalize_odor_name(roi_row.get('CSp'))
-    csm_norm = normalize_odor_name(roi_row.get('CSm'))
-    novel_norm = next((odor for odor in roi_odor_windows.keys() if odor not in {csp_norm, csm_norm}), None)
+    csp_name = roi_row.get('CSp')
+    csm_name = roi_row.get('CSm')
+    novel_name = next((odor for odor in roi_odor_windows.keys() if odor not in {csp_name, csm_name}), None)
 
     identity_to_odor = {
-        'CSp': csp_norm,
-        'CSm': csm_norm,
-        'Novel': novel_norm,
+        'CSp': csp_name,
+        'CSm': csm_name,
+        'Novel': novel_name,
     }
 
     for odor_identity in odor_order:
@@ -635,7 +1164,7 @@ else:
         print('No fly-averaged traces available for plotting.')
     else:
         group_order = sorted(fly_trace_df['group'].dropna().unique())
-        fig, axes = plt.subplots(len(group_order), 1, figsize=(4, 2.6 * len(group_order)), sharex=False, sharey=True)
+        fig, axes = plt.subplots(len(group_order), 1, figsize=(3, 3 * len(group_order)), sharex=False, sharey=True)
         if len(group_order) == 1:
             axes = [axes]
 
@@ -644,27 +1173,6 @@ else:
             group_frame_rates = roi_database.loc[roi_database['group'] == group_name, 'frame_rate_hz'].to_numpy(dtype=float)
             group_frame_rates = group_frame_rates[np.isfinite(group_frame_rates) & (group_frame_rates > 0)]
             group_frame_rate_hz = float(np.nanmedian(group_frame_rates)) if group_frame_rates.size > 0 else 1.0
-            group_meta = roi_database.loc[roi_database['group'] == group_name, ['CSp', 'CSm']]
-            csp_group_odor = normalize_odor_name(group_meta['CSp'].dropna().iloc[0]) if not group_meta['CSp'].dropna().empty else None
-            csm_group_odor = normalize_odor_name(group_meta['CSm'].dropna().iloc[0]) if not group_meta['CSm'].dropna().empty else None
-            group_roi_names = set(roi_database.loc[roi_database['group'] == group_name, 'roi_unique_name'])
-            all_group_odors = {
-                normalize_odor_name(k)
-                for roi_name_key, odor_dict in roi_avg_response_by_odor_dict.items()
-                if roi_name_key in group_roi_names
-                if isinstance(odor_dict, dict)
-                for k in odor_dict.keys()
-            }
-            novel_group_odor = next(
-                (odor for odor in all_group_odors if odor not in {csp_group_odor, csm_group_odor}),
-                None,
-            )
-            identity_to_odor = {
-                'CSp': csp_group_odor,
-                'CSm': csm_group_odor,
-                'Novel': novel_group_odor,
-            }
-
             for odor_identity in odor_order:
                 group_traces = group_subset.loc[group_subset['odor_identity'] == odor_identity, 'trace'].tolist()
                 mean_trace, sem_trace = mean_and_sem_padded(group_traces)
@@ -672,7 +1180,7 @@ else:
                     continue
 
                 time_axis = np.arange(mean_trace.size) / group_frame_rate_hz
-                trace_color = colors_hex.get(identity_to_odor.get(odor_identity), '#999999')
+                trace_color = colors_hex.get(odor_identity, '#999999')
                 axis.plot(
                     time_axis,
                     mean_trace,
@@ -712,7 +1220,7 @@ else:
         fig_grid, axes_grid = plt.subplots(
             len(group_order),
             len(odor_order),
-            figsize=(3.6 * len(odor_order), 2.3 * len(group_order)),
+            figsize=(2 * len(odor_order), 3 * len(group_order)),
             sharex=False,
             sharey=True,
             squeeze=False,
@@ -723,27 +1231,6 @@ else:
             group_frame_rates = roi_database.loc[roi_database['group'] == group_name, 'frame_rate_hz'].to_numpy(dtype=float)
             group_frame_rates = group_frame_rates[np.isfinite(group_frame_rates) & (group_frame_rates > 0)]
             group_frame_rate_hz = float(np.nanmedian(group_frame_rates)) if group_frame_rates.size > 0 else 1.0
-            group_meta = roi_database.loc[roi_database['group'] == group_name, ['CSp', 'CSm']]
-            csp_group_odor = normalize_odor_name(group_meta['CSp'].dropna().iloc[0]) if not group_meta['CSp'].dropna().empty else None
-            csm_group_odor = normalize_odor_name(group_meta['CSm'].dropna().iloc[0]) if not group_meta['CSm'].dropna().empty else None
-            group_roi_names = set(roi_database.loc[roi_database['group'] == group_name, 'roi_unique_name'])
-            all_group_odors = {
-                normalize_odor_name(k)
-                for roi_name_key, odor_dict in roi_avg_response_by_odor_dict.items()
-                if roi_name_key in group_roi_names
-                if isinstance(odor_dict, dict)
-                for k in odor_dict.keys()
-            }
-            novel_group_odor = next(
-                (odor for odor in all_group_odors if odor not in {csp_group_odor, csm_group_odor}),
-                None,
-            )
-            identity_to_odor = {
-                'CSp': csp_group_odor,
-                'CSm': csm_group_odor,
-                'Novel': novel_group_odor,
-            }
-
             for col_idx, odor_identity in enumerate(odor_order):
                 axis = axes_grid[row_idx, col_idx]
                 group_traces = group_subset.loc[group_subset['odor_identity'] == odor_identity, 'trace'].tolist()
@@ -757,7 +1244,7 @@ else:
                 mean_trace, sem_trace = mean_and_sem_padded(group_traces)
                 if mean_trace.size > 0:
                     time_axis = np.arange(mean_trace.size) / group_frame_rate_hz
-                    trace_color = colors_hex.get(identity_to_odor.get(odor_identity), '#999999')
+                    trace_color = colors_hex.get(odor_identity, '#999999')
                     axis.plot(time_axis, mean_trace, linewidth=2.0, color=trace_color)
                     if sem_trace.size == mean_trace.size:
                         axis.fill_between(time_axis, mean_trace - sem_trace, mean_trace + sem_trace, color=trace_color, alpha=0.25)
@@ -889,7 +1376,7 @@ else:
                 fig_norm, axes_norm = plt.subplots(
                     len(group_order_norm),
                     1,
-                    figsize=(4, 2.6 * len(group_order_norm)),
+                    figsize=(3, 3 * len(group_order_norm)),
                     sharex=False,
                     sharey=True,
                 )
@@ -901,27 +1388,6 @@ else:
                     group_frame_rates = roi_database.loc[roi_database['group'] == group_name, 'frame_rate_hz'].to_numpy(dtype=float)
                     group_frame_rates = group_frame_rates[np.isfinite(group_frame_rates) & (group_frame_rates > 0)]
                     group_frame_rate_hz = float(np.nanmedian(group_frame_rates)) if group_frame_rates.size > 0 else 1.0
-                    group_meta = roi_database.loc[roi_database['group'] == group_name, ['CSp', 'CSm']]
-                    csp_group_odor = normalize_odor_name(group_meta['CSp'].dropna().iloc[0]) if not group_meta['CSp'].dropna().empty else None
-                    csm_group_odor = normalize_odor_name(group_meta['CSm'].dropna().iloc[0]) if not group_meta['CSm'].dropna().empty else None
-                    group_roi_names = set(roi_database.loc[roi_database['group'] == group_name, 'roi_unique_name'])
-                    all_group_odors = {
-                        normalize_odor_name(k)
-                        for roi_name_key, odor_dict in roi_avg_response_by_odor_dict.items()
-                        if roi_name_key in group_roi_names
-                        if isinstance(odor_dict, dict)
-                        for k in odor_dict.keys()
-                    }
-                    novel_group_odor = next(
-                        (odor for odor in all_group_odors if odor not in {csp_group_odor, csm_group_odor}),
-                        None,
-                    )
-                    identity_to_odor = {
-                        'CSp': csp_group_odor,
-                        'CSm': csm_group_odor,
-                        'Novel': novel_group_odor,
-                    }
-
                     for odor_identity in odor_order:
                         group_traces = group_subset.loc[group_subset['odor_identity'] == odor_identity, 'trace'].tolist()
                         mean_trace, sem_trace = mean_and_sem_padded(group_traces)
@@ -929,7 +1395,7 @@ else:
                             continue
 
                         time_axis = np.arange(mean_trace.size) / group_frame_rate_hz
-                        trace_color = colors_hex.get(identity_to_odor.get(odor_identity), '#999999')
+                        trace_color = colors_hex.get(odor_identity, '#999999')
                         axis.plot(
                             time_axis,
                             mean_trace,
@@ -969,7 +1435,7 @@ else:
                 fig_grid_norm, axes_grid_norm = plt.subplots(
                     len(group_order_norm),
                     len(odor_order),
-                    figsize=(3.6 * len(odor_order), 2.3 * len(group_order_norm)),
+                    figsize=(2 * len(odor_order), 3 * len(group_order_norm)),
                     sharex=False,
                     sharey=True,
                     squeeze=False,
@@ -980,27 +1446,6 @@ else:
                     group_frame_rates = roi_database.loc[roi_database['group'] == group_name, 'frame_rate_hz'].to_numpy(dtype=float)
                     group_frame_rates = group_frame_rates[np.isfinite(group_frame_rates) & (group_frame_rates > 0)]
                     group_frame_rate_hz = float(np.nanmedian(group_frame_rates)) if group_frame_rates.size > 0 else 1.0
-                    group_meta = roi_database.loc[roi_database['group'] == group_name, ['CSp', 'CSm']]
-                    csp_group_odor = normalize_odor_name(group_meta['CSp'].dropna().iloc[0]) if not group_meta['CSp'].dropna().empty else None
-                    csm_group_odor = normalize_odor_name(group_meta['CSm'].dropna().iloc[0]) if not group_meta['CSm'].dropna().empty else None
-                    group_roi_names = set(roi_database.loc[roi_database['group'] == group_name, 'roi_unique_name'])
-                    all_group_odors = {
-                        normalize_odor_name(k)
-                        for roi_name_key, odor_dict in roi_avg_response_by_odor_dict.items()
-                        if roi_name_key in group_roi_names
-                        if isinstance(odor_dict, dict)
-                        for k in odor_dict.keys()
-                    }
-                    novel_group_odor = next(
-                        (odor for odor in all_group_odors if odor not in {csp_group_odor, csm_group_odor}),
-                        None,
-                    )
-                    identity_to_odor = {
-                        'CSp': csp_group_odor,
-                        'CSm': csm_group_odor,
-                        'Novel': novel_group_odor,
-                    }
-
                     for col_idx, odor_identity in enumerate(odor_order):
                         axis = axes_grid_norm[row_idx, col_idx]
                         group_traces = group_subset.loc[group_subset['odor_identity'] == odor_identity, 'trace'].tolist()
@@ -1014,7 +1459,7 @@ else:
                         mean_trace, sem_trace = mean_and_sem_padded(group_traces)
                         if mean_trace.size > 0:
                             time_axis = np.arange(mean_trace.size) / group_frame_rate_hz
-                            trace_color = colors_hex.get(identity_to_odor.get(odor_identity), '#999999')
+                            trace_color = colors_hex.get(odor_identity, '#999999')
                             axis.plot(time_axis, mean_trace, linewidth=2.0, color=trace_color)
                             if sem_trace.size == mean_trace.size:
                                 axis.fill_between(time_axis, mean_trace - sem_trace, mean_trace + sem_trace, color=trace_color, alpha=0.25)
@@ -1047,5 +1492,204 @@ else:
                 )
                 plt.show()
 
+# %%
+# --- Trace figures per CSp-specific odor ---
+for _cspt_tr in ['MCH', 'OCTT', 'IAA']:
+    _tr_roi_names = set(roi_database.loc[roi_database['CSp'].apply(normalize_odor_name) == _cspt_tr, 'roi_unique_name'])
+    if not _tr_roi_names:
+        continue
+
+    # Resolve odor-specific colors for this CSp
+    _tr_csm_col = roi_database.loc[roi_database['CSp'].apply(normalize_odor_name) == _cspt_tr, 'CSm'].dropna()
+    _tr_csm_od = normalize_odor_name(_tr_csm_col.iloc[0]) if not _tr_csm_col.empty else None
+    _tr_id_keys = {'CSp', 'CSm', 'Novel'}
+    _tr_novel_od = next((k for k in colors_hex if k not in _tr_id_keys and k != _cspt_tr and k != _tr_csm_od), None)
+    _tr_colors = {
+        'CSp':   colors_hex.get(_cspt_tr, '#999999'),
+        'CSm':   colors_hex.get(_tr_csm_od, '#999999'),
+        'Novel': colors_hex.get(_tr_novel_od, '#999999'),
+    }
+
+    # --- Non-normalized traces ---
+    if 'fly_trace_df' in dir() and not fly_trace_df.empty:
+        _tr_fly_df = fly_trace_df.loc[fly_trace_df['flyID'].isin(
+            roi_database.loc[roi_database['roi_unique_name'].isin(_tr_roi_names), 'flyID']
+        )].copy()
+
+        if not _tr_fly_df.empty:
+            _tr_groups = sorted(_tr_fly_df['group'].dropna().unique())
+
+            # Overlaid figure
+            _tr_fig, _tr_axes = plt.subplots(len(_tr_groups), 1, figsize=(3, 3 * len(_tr_groups)), sharex=False, sharey=True)
+            if len(_tr_groups) == 1:
+                _tr_axes = [_tr_axes]
+            for _tr_ax, _tr_grp in zip(_tr_axes, _tr_groups):
+                _tr_gsub = _tr_fly_df.loc[_tr_fly_df['group'] == _tr_grp]
+                _tr_frs = roi_database.loc[roi_database['group'] == _tr_grp, 'frame_rate_hz'].to_numpy(dtype=float)
+                _tr_frs = _tr_frs[np.isfinite(_tr_frs) & (_tr_frs > 0)]
+                _tr_fr = float(np.nanmedian(_tr_frs)) if _tr_frs.size > 0 else 1.0
+                for _tr_oi in odor_order:
+                    _tr_traces = _tr_gsub.loc[_tr_gsub['odor_identity'] == _tr_oi, 'trace'].tolist()
+                    _tr_mean, _tr_sem = mean_and_sem_padded(_tr_traces)
+                    if _tr_mean.size == 0:
+                        continue
+                    _tr_t = np.arange(_tr_mean.size) / _tr_fr
+                    _tr_c = _tr_colors[_tr_oi]
+                    _tr_ax.plot(_tr_t, _tr_mean, lw=2, color=_tr_c, label=f"{_tr_oi} (n={len(_tr_traces)})")
+                    if _tr_sem.size == _tr_mean.size:
+                        _tr_ax.fill_between(_tr_t, _tr_mean - _tr_sem, _tr_mean + _tr_sem, alpha=0.2, color=_tr_c)
+                    _tr_osub = _tr_gsub.loc[_tr_gsub['odor_identity'] == _tr_oi]
+                    _tr_starts = _tr_osub['stim_start_s'].to_numpy(dtype=float)
+                    _tr_ends = _tr_osub['stim_end_s'].to_numpy(dtype=float)
+                    _tr_starts = _tr_starts[np.isfinite(_tr_starts)]
+                    _tr_ends = _tr_ends[np.isfinite(_tr_ends)]
+                    if _tr_starts.size > 0 and _tr_ends.size > 0:
+                        _tr_ss = float(np.nanmedian(_tr_starts))
+                        _tr_se = float(np.nanmedian(_tr_ends))
+                        if _tr_se > _tr_ss:
+                            _tr_ax.axvspan(_tr_ss, _tr_se, color=_tr_c, alpha=0.08)
+                _tr_ax.set_title(f"Group: {_tr_grp}")
+                _tr_ax.set_ylabel('dF/F')
+                _tr_ax.grid(axis='y', alpha=0.25)
+                _tr_ax.legend(loc='best', fontsize=8)
+            _tr_axes[-1].set_xlabel('Time (s)')
+            _tr_fig.suptitle(f"Fly-averaged traces by group (CSp = {_cspt_tr})", y=1.01)
+            plt.tight_layout()
+            _tr_fig.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}_fly_averaged_traces_by_group_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
+            plt.show()
+
+            # Grid figure
+            _tr_fig_g, _tr_axes_g = plt.subplots(len(_tr_groups), len(odor_order), figsize=(2 * len(odor_order), 3 * len(_tr_groups)), sharex=False, sharey=True, squeeze=False)
+            for _ri, _tr_grp in enumerate(_tr_groups):
+                _tr_gsub = _tr_fly_df.loc[_tr_fly_df['group'] == _tr_grp]
+                _tr_frs = roi_database.loc[roi_database['group'] == _tr_grp, 'frame_rate_hz'].to_numpy(dtype=float)
+                _tr_frs = _tr_frs[np.isfinite(_tr_frs) & (_tr_frs > 0)]
+                _tr_fr = float(np.nanmedian(_tr_frs)) if _tr_frs.size > 0 else 1.0
+                for _ci, _tr_oi in enumerate(odor_order):
+                    _tr_ax = _tr_axes_g[_ri, _ci]
+                    _tr_traces = _tr_gsub.loc[_tr_gsub['odor_identity'] == _tr_oi, 'trace'].tolist()
+                    for _ft in _tr_traces:
+                        _ft = np.asarray(_ft, dtype=float)
+                        if _ft.size > 0:
+                            _tr_ax.plot(np.arange(_ft.size) / _tr_fr, _ft, color='0.75', lw=0.8, alpha=0.7)
+                    _tr_mean, _tr_sem = mean_and_sem_padded(_tr_traces)
+                    if _tr_mean.size > 0:
+                        _tr_t = np.arange(_tr_mean.size) / _tr_fr
+                        _tr_c = _tr_colors[_tr_oi]
+                        _tr_ax.plot(_tr_t, _tr_mean, lw=2.0, color=_tr_c)
+                        if _tr_sem.size == _tr_mean.size:
+                            _tr_ax.fill_between(_tr_t, _tr_mean - _tr_sem, _tr_mean + _tr_sem, color=_tr_c, alpha=0.25)
+                        _tr_osub = _tr_gsub.loc[_tr_gsub['odor_identity'] == _tr_oi]
+                        _tr_starts = _tr_osub['stim_start_s'].to_numpy(dtype=float)
+                        _tr_ends = _tr_osub['stim_end_s'].to_numpy(dtype=float)
+                        _tr_starts = _tr_starts[np.isfinite(_tr_starts)]
+                        _tr_ends = _tr_ends[np.isfinite(_tr_ends)]
+                        if _tr_starts.size > 0 and _tr_ends.size > 0:
+                            _tr_ss = float(np.nanmedian(_tr_starts))
+                            _tr_se = float(np.nanmedian(_tr_ends))
+                            if _tr_se > _tr_ss:
+                                _tr_ax.axvspan(_tr_ss, _tr_se, color=_tr_c, alpha=0.08)
+                    if _ri == 0:
+                        _tr_ax.set_title(_tr_oi)
+                    if _ci == 0:
+                        _tr_ax.set_ylabel(f"{_tr_grp}\ndF/F")
+                    if _ri == len(_tr_groups) - 1:
+                        _tr_ax.set_xlabel('Time (s)')
+                    _tr_ax.grid(axis='y', alpha=0.25)
+            _tr_fig_g.suptitle(f"Fly traces by group and odor identity (CSp = {_cspt_tr})", y=1.01)
+            plt.tight_layout()
+            _tr_fig_g.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}_fly_traces_grid_by_group_and_odor_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
+            plt.show()
+
+    # --- Normalized traces ---
+    if 'fly_trace_df_norm' in dir() and not fly_trace_df_norm.empty:
+        _tr_fly_df_n = fly_trace_df_norm.loc[fly_trace_df_norm['flyID'].isin(
+            roi_database.loc[roi_database['roi_unique_name'].isin(_tr_roi_names), 'flyID']
+        )].copy()
+
+        if not _tr_fly_df_n.empty:
+            _tr_groups_n = sorted(_tr_fly_df_n['group'].dropna().unique())
+
+            # Overlaid figure
+            _tr_fig_n, _tr_axes_n = plt.subplots(len(_tr_groups_n), 1, figsize=(3, 3 * len(_tr_groups_n)), sharex=False, sharey=True)
+            if len(_tr_groups_n) == 1:
+                _tr_axes_n = [_tr_axes_n]
+            for _tr_ax, _tr_grp in zip(_tr_axes_n, _tr_groups_n):
+                _tr_gsub = _tr_fly_df_n.loc[_tr_fly_df_n['group'] == _tr_grp]
+                _tr_frs = roi_database.loc[roi_database['group'] == _tr_grp, 'frame_rate_hz'].to_numpy(dtype=float)
+                _tr_frs = _tr_frs[np.isfinite(_tr_frs) & (_tr_frs > 0)]
+                _tr_fr = float(np.nanmedian(_tr_frs)) if _tr_frs.size > 0 else 1.0
+                for _tr_oi in odor_order:
+                    _tr_traces = _tr_gsub.loc[_tr_gsub['odor_identity'] == _tr_oi, 'trace'].tolist()
+                    _tr_mean, _tr_sem = mean_and_sem_padded(_tr_traces)
+                    if _tr_mean.size == 0:
+                        continue
+                    _tr_t = np.arange(_tr_mean.size) / _tr_fr
+                    _tr_c = _tr_colors[_tr_oi]
+                    _tr_ax.plot(_tr_t, _tr_mean, lw=2, color=_tr_c, label=f"{_tr_oi} (n={len(_tr_traces)})")
+                    if _tr_sem.size == _tr_mean.size:
+                        _tr_ax.fill_between(_tr_t, _tr_mean - _tr_sem, _tr_mean + _tr_sem, alpha=0.2, color=_tr_c)
+                    _tr_osub = _tr_gsub.loc[_tr_gsub['odor_identity'] == _tr_oi]
+                    _tr_starts = _tr_osub['stim_start_s'].to_numpy(dtype=float)
+                    _tr_ends = _tr_osub['stim_end_s'].to_numpy(dtype=float)
+                    _tr_starts = _tr_starts[np.isfinite(_tr_starts)]
+                    _tr_ends = _tr_ends[np.isfinite(_tr_ends)]
+                    if _tr_starts.size > 0 and _tr_ends.size > 0:
+                        _tr_ss = float(np.nanmedian(_tr_starts))
+                        _tr_se = float(np.nanmedian(_tr_ends))
+                        if _tr_se > _tr_ss:
+                            _tr_ax.axvspan(_tr_ss, _tr_se, color=_tr_c, alpha=0.08)
+                _tr_ax.set_title(f"Group: {_tr_grp}")
+                _tr_ax.set_ylabel('Normalized dF/F')
+                _tr_ax.grid(axis='y', alpha=0.25)
+                _tr_ax.legend(loc='best', fontsize=8)
+            _tr_axes_n[-1].set_xlabel('Time (s)')
+            _tr_fig_n.suptitle(f"Normalized fly-averaged traces by group (CSp = {_cspt_tr})", y=1.01)
+            plt.tight_layout()
+            _tr_fig_n.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}_normalized_fly_averaged_traces_by_group_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
+            plt.show()
+
+            # Grid figure
+            _tr_fig_gn, _tr_axes_gn = plt.subplots(len(_tr_groups_n), len(odor_order), figsize=(2 * len(odor_order), 3 * len(_tr_groups_n)), sharex=False, sharey=True, squeeze=False)
+            for _ri, _tr_grp in enumerate(_tr_groups_n):
+                _tr_gsub = _tr_fly_df_n.loc[_tr_fly_df_n['group'] == _tr_grp]
+                _tr_frs = roi_database.loc[roi_database['group'] == _tr_grp, 'frame_rate_hz'].to_numpy(dtype=float)
+                _tr_frs = _tr_frs[np.isfinite(_tr_frs) & (_tr_frs > 0)]
+                _tr_fr = float(np.nanmedian(_tr_frs)) if _tr_frs.size > 0 else 1.0
+                for _ci, _tr_oi in enumerate(odor_order):
+                    _tr_ax = _tr_axes_gn[_ri, _ci]
+                    _tr_traces = _tr_gsub.loc[_tr_gsub['odor_identity'] == _tr_oi, 'trace'].tolist()
+                    for _ft in _tr_traces:
+                        _ft = np.asarray(_ft, dtype=float)
+                        if _ft.size > 0:
+                            _tr_ax.plot(np.arange(_ft.size) / _tr_fr, _ft, color='0.75', lw=0.8, alpha=0.7)
+                    _tr_mean, _tr_sem = mean_and_sem_padded(_tr_traces)
+                    if _tr_mean.size > 0:
+                        _tr_t = np.arange(_tr_mean.size) / _tr_fr
+                        _tr_c = _tr_colors[_tr_oi]
+                        _tr_ax.plot(_tr_t, _tr_mean, lw=2.0, color=_tr_c)
+                        if _tr_sem.size == _tr_mean.size:
+                            _tr_ax.fill_between(_tr_t, _tr_mean - _tr_sem, _tr_mean + _tr_sem, color=_tr_c, alpha=0.25)
+                        _tr_osub = _tr_gsub.loc[_tr_gsub['odor_identity'] == _tr_oi]
+                        _tr_starts = _tr_osub['stim_start_s'].to_numpy(dtype=float)
+                        _tr_ends = _tr_osub['stim_end_s'].to_numpy(dtype=float)
+                        _tr_starts = _tr_starts[np.isfinite(_tr_starts)]
+                        _tr_ends = _tr_ends[np.isfinite(_tr_ends)]
+                        if _tr_starts.size > 0 and _tr_ends.size > 0:
+                            _tr_ss = float(np.nanmedian(_tr_starts))
+                            _tr_se = float(np.nanmedian(_tr_ends))
+                            if _tr_se > _tr_ss:
+                                _tr_ax.axvspan(_tr_ss, _tr_se, color=_tr_c, alpha=0.08)
+                    if _ri == 0:
+                        _tr_ax.set_title(_tr_oi)
+                    if _ci == 0:
+                        _tr_ax.set_ylabel(f"{_tr_grp}\nNormalized dF/F")
+                    if _ri == len(_tr_groups_n) - 1:
+                        _tr_ax.set_xlabel('Time (s)')
+                    _tr_ax.grid(axis='y', alpha=0.25)
+            _tr_fig_gn.suptitle(f"Normalized fly traces by group and odor identity (CSp = {_cspt_tr})", y=1.01)
+            plt.tight_layout()
+            _tr_fig_gn.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}_normalized_fly_traces_grid_by_group_and_odor_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
+            plt.show()
 
  # %%

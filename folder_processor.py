@@ -8,11 +8,11 @@ import pandas as pd
 
 
 #%%
-exp_name = '2026_02_Alpha3_dendrites' # Update this path accordingly
-day_name = '2026_02_25' # Update this path accordingly
+container_name = '2025_10_Gamma1_CC_extinction' # Update this path accordingly
+day_name = '2025_11_13' # Update this path accordingly
 
 main_dir = "/Volumes/tungsten/scratch/gfelsenb/Ana/2p-imaging/burak/"
-exp_path = os.path.join(main_dir, exp_name) # Update this path accordingly
+exp_path = os.path.join(main_dir, container_name) # Update this path accordingly
 day_folder_path = os.path.join(exp_path, day_name) # Update this path accordingly
 
 day_folder = Path(day_folder_path)
@@ -43,6 +43,16 @@ for file in files:
         identifier = match.group(1)
         target_folder = day_folder / identifier
         
+        # Create target folder if it doesn't exist
+        if not target_folder.exists():
+            try:
+                target_folder.mkdir(parents=True, exist_ok=True)
+                print(f"Created folder: {target_folder}")
+            except Exception as e:
+                print(f"Error creating folder {target_folder}: {e}")
+                continue
+
+
         # Check if target folder exists
         if target_folder.exists() and target_folder.is_dir():
             target_path = target_folder / file.name

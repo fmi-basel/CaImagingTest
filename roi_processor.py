@@ -37,6 +37,9 @@ class ROISelector:
         self.roi_masks = []
         self.traces = []
         self.raw_traces = []
+        self.roi_patches = []
+        self.roi_name_texts = []
+        self.roi_colors = []
         self.current_offset = 0
         self.background_idx = None
 
@@ -45,7 +48,7 @@ class ROISelector:
 
         self.fig, (self.ax_map, self.ax_trace) = plt.subplots(1, 2, figsize=(16, 8))
         self.ax_map.imshow(sd_map, cmap='magma', interpolation='nearest', origin='upper')
-        self.ax_map.set_title("Select ROIs\n'b': background | 'c': clear | 'q': quit")
+        self.ax_map.set_title("Select ROIs\n'b': bg | 'z': undo | 'r': rename last | 'c': clear all | 'q': finish")
 
         self.ax_trace.set_facecolor('white')
         self.ax_trace.set_title('Stacked Delta F/F Traces (Waterfall Plot)')
@@ -54,6 +57,15 @@ class ROISelector:
         self._init_selector()
         self.fig.canvas.mpl_connect('key_press_event', self.on_key)
         plt.tight_layout()
+        # Avoid entering a nested Qt event loop when already running inside a Qt GUI
+        # (important on Windows where a second exec_() call deadlocks).
+        try:
+            from PyQt5.QtWidgets import QApplication as _QApp
+            if _QApp.instance() is not None:
+                plt.show(block=False)
+                return
+        except ImportError:
+            pass
         plt.show()
 
     def _init_selector(self):
@@ -67,6 +79,8 @@ class ROISelector:
             self._next_is_background = False
             self.poly.disconnect_events()
             self._init_selector()
+            if not is_bg:
+                self._prompt_and_rename_last()
 
     def calculate_df_f(self, raw_trace):
         # Calculate baseline (F0) as mean signal over first 10 seconds
@@ -95,6 +109,7 @@ class ROISelector:
                 roi_name = f"ROI{roi_count + 1}"
 
         color = self.cmap(len(self.rois) % 10)
+        self.roi_colors.append(color)
         poly_patch = Polygon(
             verts,
             closed=True,
@@ -105,6 +120,7 @@ class ROISelector:
             alpha=0.4,
         )
         self.ax_map.add_patch(poly_patch)
+        self.roi_patches.append(poly_patch)
 
         raw_f = np.mean(self.movie[:, mask], axis=1)
         df_f = self.calculate_df_f(raw_f)
@@ -122,7 +138,7 @@ class ROISelector:
 
         time_axis = np.arange(len(df_f)) / self.fs
         self.ax_trace.plot(time_axis, shifted_trace, color=color, linewidth=1.2)
-        self.ax_trace.text(
+        text_obj = self.ax_trace.text(
             -0.5,
             self.current_offset,
             roi_name,
@@ -131,6 +147,7 @@ class ROISelector:
             ha='right',
             fontsize=9,
         )
+        self.roi_name_texts.append(text_obj)
 
         self.current_offset += (np.max(df_f) * self.spacing_factor)
 
@@ -144,10 +161,18 @@ class ROISelector:
 
     def on_key(self, event):
         if event.key == 'b':
-            # Mark next ROI as background
             print("Next ROI will be marked as BACKGROUND")
             self._next_is_background = True
+        elif event.key == 'z':
+            self._undo_last_roi()
+        elif event.key == 'r':
+            self._prompt_and_rename_last()
         elif event.key == 'c':
+            for patch in self.roi_patches:
+                patch.remove()
+            self.roi_patches = []
+            self.roi_name_texts = []
+            self.roi_colors = []
             self.ax_trace.clear()
             self.ax_trace.set_facecolor('white')
             self.current_offset = 0
@@ -161,6 +186,78 @@ class ROISelector:
             self.fig.canvas.draw()
         elif event.key == 'q':
             plt.close(self.fig)
+
+    def _prompt_roi_name(self, default_name):
+        """Show a Qt input dialog to let the user name the ROI."""
+        try:
+            from PyQt5.QtWidgets import QApplication, QInputDialog
+            if QApplication.instance() is not None:
+                name, ok = QInputDialog.getText(
+                    None, 'Name ROI', 'Enter a name for this ROI:', text=default_name
+                )
+                if ok and name.strip():
+                    return name.strip()
+        except Exception:
+            pass
+        return default_name
+
+    def _prompt_and_rename_last(self):
+        """Prompt the user to rename the most recently drawn ROI."""
+        if not self.roi_names:
+            return
+        current_name = self.roi_names[-1]
+        new_name = self._prompt_roi_name(current_name)
+        if new_name != current_name:
+            self.roi_names[-1] = new_name
+            if self.roi_name_texts:
+                self.roi_name_texts[-1].set_text(new_name)
+            self.fig.canvas.draw()
+
+    def _undo_last_roi(self):
+        """Remove the most recently drawn ROI."""
+        if not self.rois:
+            print('No ROIs to undo.')
+            return
+        last_idx = len(self.rois) - 1
+        was_background = (self.background_idx == last_idx)
+        removed_name = self.roi_names.pop()
+        self.rois.pop()
+        self.roi_masks.pop()
+        self.traces.pop()
+        self.raw_traces.pop()
+        self.roi_colors.pop()
+        if self.roi_patches:
+            self.roi_patches.pop().remove()
+        if was_background:
+            self.background_idx = None
+        elif self.background_idx is not None and self.background_idx >= len(self.rois):
+            self.background_idx = None
+        self._redraw_traces()
+        print(f'Removed ROI: {removed_name}')
+        self.fig.canvas.draw()
+
+    def _redraw_traces(self):
+        """Clear and redraw the trace panel from the current ROI list."""
+        self.ax_trace.clear()
+        self.ax_trace.set_facecolor('white')
+        self.roi_name_texts = []
+        self.current_offset = 0
+        self._stim_drawn = False
+        for name, trace, color in zip(self.roi_names, self.traces, self.roi_colors):
+            shifted_trace = trace + self.current_offset
+            time_axis = np.arange(len(trace)) / self.fs
+            self.ax_trace.plot(time_axis, shifted_trace, color=color, linewidth=1.2)
+            text_obj = self.ax_trace.text(
+                -0.5, self.current_offset, name,
+                color=color, va='center', ha='right', fontsize=9,
+            )
+            self.roi_name_texts.append(text_obj)
+            self.current_offset += (np.max(trace) * self.spacing_factor)
+        if self.stimulus_id_trace is not None and self.roi_names:
+            self._draw_stimulus_periods()
+            self._stim_drawn = True
+        self.ax_trace.set_xlabel('Time (s)')
+        self.ax_trace.set_ylabel('Stacked Delta F/F (Relative units)')
     
     def get_background_subtracted_traces(self):
         """Return traces with background subtraction applied"""
@@ -275,6 +372,7 @@ def run_roi_selection(
     auto_roi_params=None,
     df_f_method='1-11s',
     roi_names=None,
+    gui_mode=False,
 ):
     mode = str(mode).lower().strip()
 
@@ -287,16 +385,26 @@ def run_roi_selection(
             roi_names=roi_names,
         )
 
-        # Ensure manual selection blocks until the ROI window is closed.
-        # In some backends, ROISelector's internal show() can be non-blocking.
-        try:
-            plt.show(block=True)
-        except TypeError:
-            plt.show()
+        # Block until the ROI window is closed.
+        if gui_mode:
+            # When running inside a Qt GUI, avoid re-entering QApplication.exec_().
+            import time
+            from PyQt5.QtWidgets import QApplication
+            plt.show(block=False)
+            while plt.fignum_exists(selector.fig.number):
+                QApplication.processEvents()
+                time.sleep(0.02)
+        else:
+            # Ensure manual selection blocks until the ROI window is closed.
+            # In some backends, ROISelector's internal show() can be non-blocking.
+            try:
+                plt.show(block=True)
+            except TypeError:
+                plt.show()
 
-        # Wait for user interaction to finish (close window with 'q')
-        while plt.fignum_exists(selector.fig.number):
-            plt.pause(0.05)
+            # Wait for user interaction to finish (close window with 'q')
+            while plt.fignum_exists(selector.fig.number):
+                plt.pause(0.05)
 
         # Close the figure after selection is done
         plt.close(selector.fig)

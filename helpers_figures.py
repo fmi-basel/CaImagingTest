@@ -1,7 +1,6 @@
 import matplotlib.pyplot as plt
 import numpy as np
 from matplotlib import cm
-from scipy.stats import wilcoxon
 
 
 def plot_mean_std_projection(
@@ -176,7 +175,6 @@ def plot_trial_averaged_roi_responses(
 	downsampled_fr,
 	series_id,
 	series_meta,
-	roi_responsive_df,
 	roi_trial_plot_dir,
 	pre_window_frames,
 	post_window_frames,
@@ -252,16 +250,6 @@ def plot_trial_averaged_roi_responses(
 	csm_name = _normalize_odor_name(series_meta.get('CSm'))
 	stimulus_ids_plot_order = _ordered_stimulus_ids(stimulus_ids_unique, vial_to_odor, csp_name, csm_name)
 
-	if roi_responsive_df is not None and not roi_responsive_df.empty:
-		roi_responsive_map = dict(
-			zip(
-				roi_responsive_df['roi'].astype(str),
-				roi_responsive_df['is_responsive'].astype(bool),
-			)
-		)
-	else:
-		roi_responsive_map = {str(name): False for name in roi_names}
-
 	n_cols = min(max_cols, n_rois)
 	n_rows = int(np.ceil(n_rois / n_cols))
 	fig = plt.figure(figsize=(n_cols * cell_w, n_rows * cell_h), dpi=150)
@@ -331,14 +319,7 @@ def plot_trial_averaged_roi_responses(
 
 		ax_trace.axvline(0, color='k', ls='--', lw=1)
 		ax_trace.axhline(0, color='0.7', lw=0.8)
-		is_resp = bool(roi_responsive_map.get(str(roi_name), False))
-		frame_color = 'green' if is_resp else 'red'
-		for spine in ax_img.spines.values():
-			spine.set_visible(True)
-			spine.set_edgecolor(frame_color)
-			spine.set_linewidth(2.0)
-		resp_label = 'responsive' if is_resp else 'non-responsive'
-		ax_trace.set_title(f'{roi_name} ({resp_label})', fontsize=font_size)
+		ax_trace.set_title(f'{roi_name}', fontsize=font_size)
 		ax_trace.set_xlabel('Time (s)', fontsize=font_size)
 		ax_trace.set_ylabel('ΔF/F', fontsize=font_size)
 		ax_trace.tick_params(labelsize=font_size)
@@ -460,8 +441,10 @@ def plot_group_identity_boxplots(
 	output_path,
 	normalize_odor_name,
 	colors_hex,
-	roi_avg_response_by_odor_dict,
 	pvalue_to_stars,
+	csp_odor=None,
+	stats_annotations=None,
+	omnibus_stats=None,
 ):
 	if roi_identity_subset.empty or roi_database_subset.empty:
 		print(f"No ROI identity responses available for: {figure_title}")
@@ -476,7 +459,7 @@ def plot_group_identity_boxplots(
 		print(f"No groups available for: {figure_title}")
 		return
 
-	fig, axes = plt.subplots(n_groups, 1, figsize=(8, 3.2 * n_groups), sharex=True)
+	fig, axes = plt.subplots(n_groups, 1, figsize=(5.5, 3.2 * n_groups), sharex=True)
 	if n_groups == 1:
 		axes = [axes]
 
@@ -485,30 +468,21 @@ def plot_group_identity_boxplots(
 	for axis, (group_name, group_df) in zip(axes, grouped):
 		box_data = []
 		n_by_odor = []
-		group_meta = roi_database_subset.loc[roi_database_subset['group'] == group_name, ['CSp', 'CSm']]
-		csp_group_odor = normalize_odor_name(group_meta['CSp'].dropna().iloc[0]) if not group_meta['CSp'].dropna().empty else None
-		csm_group_odor = normalize_odor_name(group_meta['CSm'].dropna().iloc[0]) if not group_meta['CSm'].dropna().empty else None
-		group_roi_names = set(roi_database_subset.loc[roi_database_subset['group'] == group_name, 'roi_unique_name'])
-		all_group_odors = {
-			normalize_odor_name(k)
-			for roi_name_key, odor_dict in roi_avg_response_by_odor_dict.items()
-			if roi_name_key in group_roi_names
-			if isinstance(odor_dict, dict)
-			for k in odor_dict.keys()
-		}
-		novel_group_odor = next(
-			(odor for odor in all_group_odors if odor not in {csp_group_odor, csm_group_odor}),
-			None,
-		)
-		identity_to_odor = {
-			'CSp': csp_group_odor,
-			'CSm': csm_group_odor,
-			'Novel': novel_group_odor,
-		}
-		box_colors = [
-			colors_hex.get(identity_to_odor.get(odor_identity), '#999999')
-			for odor_identity in odor_order
-		]
+		if csp_odor is not None:
+			_csm_col = roi_database_subset['CSm'].dropna()
+			_csm_odor = normalize_odor_name(_csm_col.iloc[0]) if not _csm_col.empty else None
+			_identity_keys = {'CSp', 'CSm', 'Novel'}
+			_novel_odor = next(
+				(k for k in colors_hex if k not in _identity_keys and k != csp_odor and k != _csm_odor),
+				None,
+			)
+			box_colors = [
+				colors_hex.get(csp_odor, '#999999'),
+				colors_hex.get(_csm_odor, '#999999'),
+				colors_hex.get(_novel_odor, '#999999'),
+			]
+		else:
+			box_colors = [colors_hex.get(identity, '#999999') for identity in odor_order]
 
 		for odor in odor_order:
 			odor_values = group_df.loc[group_df['odor_identity'] == odor, 'response'].to_numpy(dtype=float)
@@ -543,42 +517,38 @@ def plot_group_identity_boxplots(
 				linewidths=0.25,
 			)
 
-		csp_csm_pairs = (
-			group_df
-			.pivot_table(index='roi_unique_name', columns='odor_identity', values='response', aggfunc='mean')
-			.reindex(columns=['CSp', 'CSm'])
-			.dropna()
-		)
-		csp_csm_pvalue = np.nan
-		if len(csp_csm_pairs) >= 2:
-			try:
-				csp_csm_pvalue = float(
-					wilcoxon(
-						csp_csm_pairs['CSp'].to_numpy(dtype=float),
-						csp_csm_pairs['CSm'].to_numpy(dtype=float),
-						alternative='two-sided',
-						zero_method='wilcox',
-					).pvalue
-				)
-			except ValueError:
-				csp_csm_pvalue = np.nan
-
-		y_annot = 0.92
-		axis.plot([0, 0, 1, 1], [y_annot - 0.02, y_annot, y_annot, y_annot - 0.02], color='black', linewidth=1.0)
-		axis.text(
-			0.5,
-			y_annot + 0.015,
-			f"CSp vs CSm: p={csp_csm_pvalue:.3g} ({pvalue_to_stars(csp_csm_pvalue)})",
-			ha='center',
-			va='bottom',
-			fontsize=9,
-		)
+		# Draw pairwise statistical brackets from precomputed stats_annotations
+		odor_pos = {'CSp': 0, 'CSm': 1, 'Novel': 2}
+		grp_stats = (stats_annotations or {}).get(group_name, {})
+		valid_flat = np.concatenate([d for d in box_data if d.size > 0]) if any(d.size > 0 for d in box_data) else np.array([0.0])
+		y_top = float(np.nanmax(valid_flat)) if valid_flat.size > 0 else 0.8
+		y_bottom = float(np.nanmin(valid_flat)) if valid_flat.size > 0 else -0.2
+		if grp_stats:
+			# Sort: innermost span first (lowest bracket), widest span last (topmost)
+			sorted_pairs = sorted(grp_stats.keys(), key=lambda p: abs(odor_pos.get(p[1], 0) - odor_pos.get(p[0], 0)))
+			y_step = 0.12
+			n_drawn = 0
+			for b_idx, (oa, ob) in enumerate(sorted_pairs):
+				p_val = grp_stats[(oa, ob)]
+				if not np.isfinite(p_val):
+					continue
+				x1, x2 = float(odor_pos[oa]), float(odor_pos[ob])
+				y_b = y_top + 0.08 + b_idx * y_step
+				axis.plot([x1, x1, x2, x2], [y_b - 0.03, y_b, y_b, y_b - 0.03], color='black', linewidth=1.0, clip_on=False)
+				axis.text((x1 + x2) / 2, y_b + 0.01, f"p={p_val:.3g} {pvalue_to_stars(p_val)}", ha='center', va='bottom', fontsize=7)
+				n_drawn += 1
+			y_top_bracket = y_top + 0.08 + n_drawn * y_step
+		else:
+			y_top_bracket = y_top
 
 		axis.set_ylabel('Response')
-		axis.set_ylim(-0.2, 1.0)
-		axis.set_title(
-			f"Group: {group_name} | n(CSp, CSm, Novel)=({n_by_odor[0]}, {n_by_odor[1]}, {n_by_odor[2]})"
-		)
+		axis.set_ylim(min(-0.2, y_bottom - 0.12), max(1.0, y_top_bracket + 0.12))
+		_ax_title = f"Group: {group_name} | n(CSp,CSm,Novel)=({n_by_odor[0]},{n_by_odor[1]},{n_by_odor[2]})"
+		if omnibus_stats is not None and group_name in omnibus_stats:
+			_kw_p = omnibus_stats[group_name].get('kruskal', {}).get('pvalue', np.nan)
+			if np.isfinite(_kw_p):
+				_ax_title += f"  |  KW: p={_kw_p:.3g} {pvalue_to_stars(_kw_p)}"
+		axis.set_title(_ax_title, fontsize=9)
 		axis.grid(axis='y', alpha=0.25)
 
 	axes[-1].set_xticks(x_positions)

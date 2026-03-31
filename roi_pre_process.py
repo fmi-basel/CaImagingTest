@@ -20,8 +20,8 @@ from batch_utilities import load_series_metadata
 
 #%% Adjust the following depending on the experiment
 base_dir = "/Volumes/tungsten/scratch/gfelsenb/Ana/2p-imaging/burak/"
-container_id = '2026_03_Beta1_counterconditioned_dendrites'
-day_id = '2026_02_11'
+container_id = '2025_10_Gamma1_CC_extinction'
+day_id = '2025_11_13'
 
 motion_correction_profile = 'dendrites'  # boutons, dendrites
 roi_names_input = None  # e.g. ['dendrite_1', 'spine_1'] or None for auto-naming
@@ -57,7 +57,7 @@ for series_path in series_paths:
 
     series_meta, vial_to_odor = load_series_metadata(db_path, series_id, experiment_id)
 
-    #%% Load motion-corrected movie and registration metadata
+    # Load motion-corrected movie and registration metadata
     suite2p_dir = os.path.join(series_dir, 'suite2p_corrected')
     processed_movie = np.load(os.path.join(suite2p_dir, f'{series_id}_corrected.npy'), mmap_mode='r')
     ops = np.load(os.path.join(suite2p_dir, 'motion_input_ops.npy'), allow_pickle=True).item()
@@ -70,7 +70,7 @@ for series_path in series_paths:
     # processed_movie_cropped = processed_movie[:, yrange[0]:yrange[1], xrange[0]:xrange[1]]
     processed_movie_cropped = processed_movie
 
-    #%% Map stimulus IDs from saved stim trace + OSF file
+    # Map stimulus IDs from saved stim trace + OSF file
     stim_on_trace_downsampled_interp = np.load(os.path.join(series_dir, f'{series_id}_stim_trace.npy'))
     osf_path = os.path.join(series_dir, f'{series_id}.osf')
     stimulus_id_trace, stimulus_sequence, stim_starts, stim_ends = map_stimulus_ids_from_osf(
@@ -83,7 +83,7 @@ for series_path in series_paths:
     mapped_stimuli = [vial_to_odor.get(vial_id, f"V{vial_id}") for vial_id in mapped_ids]
     print(f"Mapped stimuli: {mapped_stimuli}")
 
-    #%% Visualize mean and std projections of the corrected movie
+    # Visualize mean and std projections of the corrected movie
     plot_mean_std_projection(
         processed_movie_cropped,
         save_path=os.path.join(results_dir, f'{series_id}_mean_std_images.png'),
@@ -96,7 +96,7 @@ for series_path in series_paths:
         dpi=150,
     )
 
-    #%% ROI selection (manual or automatic) — requires interactive backend
+    # ROI selection (manual or automatic) — requires interactive backend
     %matplotlib qt
     extraction_image = processed_movie_cropped.mean(axis=0)
     auto_roi_params = get_auto_roi_params(auto_roi_profile)
@@ -127,7 +127,7 @@ for series_path in series_paths:
     for roi_name, trace in bg_subtracted_dict.items():
         print(f"  {roi_name}: shape {trace.shape}")
 
-    #%% Plot ROI masks and background-subtracted traces with stimulus periods
+    # Plot ROI masks and background-subtracted traces with stimulus periods
     %matplotlib inline
     traces_fig_path = os.path.join(results_dir, f'{series_id}_roi_analysis.pdf')
     plot_roi_masks_and_traces(
@@ -148,7 +148,7 @@ for series_path in series_paths:
     )
     print(f"Saved ROI analysis figure to: {traces_fig_path}")
 
-    #%% Build stimulus segments
+    # Build stimulus segments
     stim_ids = np.asarray(stimulus_id_trace).astype(int)
     if stim_ids.size == 0:
         stim_segments = []
@@ -167,7 +167,7 @@ for series_path in series_paths:
     context_window_s = 5.0
     context_window_frames = int(round(context_window_s * downsampled_fr))
 
-    #%% Build nested ROI dictionary with single-trial and trial-averaged traces
+    # Build nested ROI dictionary with single-trial and trial-averaged traces
     roi_data_nested = {}
 
     for roi_idx, roi_name in enumerate(roi_names):
@@ -283,7 +283,7 @@ for series_path in series_paths:
             'mean_image': extraction_image,
         }
 
-    #%% Save the dataset
+    # Save the dataset
     series_meta['stim_info'] = {
         'aurora_vial_info': vial_to_odor,
         'stim_id_trace': stimulus_id_trace,
@@ -314,7 +314,7 @@ for series_path in series_paths:
         pickle.dump(session_results, f)
     print(f"Dataset saved to: {save_file}")
 
-    #%% Plot trial-averaged and trial-overlaid responses
+    # Plot trial-averaged and trial-overlaid responses
     roi_trial_plot_dir = os.path.join(results_dir, 'roi_trial_average_plots')
     os.makedirs(roi_trial_plot_dir, exist_ok=True)
 
@@ -352,7 +352,6 @@ for series_path in series_paths:
             downsampled_fr=downsampled_fr,
             series_id=series_id,
             series_meta=series_meta,
-            roi_responsive_df=None,
             roi_trial_plot_dir=roi_trial_plot_dir,
             pre_window_frames=pre_window_frames,
             post_window_frames=post_window_frames,
@@ -384,3 +383,5 @@ for series_path in series_paths:
 
     print(f"Saved ROI trial plots to: {roi_trial_plot_dir}")
     print(f"Series {series_id} complete.")
+
+# %%
