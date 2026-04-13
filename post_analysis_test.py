@@ -19,10 +19,15 @@ from postUtils import (
 )
 from utilities import load_experiment_metadata
 
-#%%
+#%% Modify the following
 main_dir = "/Volumes/tungsten/scratch/gfelsenb/Ana/2p-imaging/burak/"
-container_id = '2025_10_Gamma1_CC_extinction'
+container_id = '2026_03_Beta1_counterconditioned_dendrites'
 
+roi_type_to_analyze = 'AT' # 'None' for all, or specify a string that is part of the roi_unique_name to filter which ROIs to include in the analysis and plots. For example, 'AT', 'den'.
+_roi_type_tag = '' if roi_type_to_analyze == 'None' else f'_{roi_type_to_analyze}'
+_roi_type_label = '' if roi_type_to_analyze == 'None' else f' [{roi_type_to_analyze} ROIs]'
+
+#%%
 experiment_dir = os.path.join(main_dir, container_id)  # Update this path accordingly
 processed_data_dir = os.path.join(main_dir, container_id, f'{container_id}_processed_data')
 results_dir = os.path.join(experiment_dir, 'results')
@@ -41,6 +46,8 @@ processed_data_files = [f for f in pkl_files if re.search(r'_processed_data\.pkl
 print(f"Found {len(processed_data_files)} processed data files in {processed_data_dir}.")
 
 # %%
+print("Processing data files and building ROI database...")
+print(f'Analyzing ROIs of type: {roi_type_to_analyze}')
 roi_rows = []
 roi_trial_response_dict = {}
 roi_trial_response_norm_dict = {}
@@ -89,6 +96,9 @@ for p_file in processed_data_files:
     csm_name = normalize_odor_name(curr_CSm)
 
     for roi_unique_name, roi_data in rois.items():
+        curr_roi_type = roi_unique_name.split('_')[-1]  # Assuming ROI type is the last part of the name
+        if roi_type_to_analyze != 'None' and curr_roi_type != roi_type_to_analyze:
+            continue
         single_trial_ctx = roi_data.get('single_trial_traces_with_context', {})
         trial_response_by_odor = {}
         trial_pass_by_odor = {}
@@ -520,8 +530,8 @@ _bp_subsets = [
         roi_identity_df,
         roi_database,
         None,
-        'ROI averaged responses by group and odor identity',
-        os.path.join(results_dir, f"{safe_filename(container_id)}_roi_group_boxplots.png"),
+        f'ROI averaged responses by group and odor identity{_roi_type_label}',
+        os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_roi_group_boxplots.png"),
     ),
 ]
 for _cspt in ['MCH', 'OCTT', 'IAA']:
@@ -531,8 +541,8 @@ for _cspt in ['MCH', 'OCTT', 'IAA']:
         roi_identity_df.loc[roi_identity_df['roi_unique_name'].isin(_names_csp)].copy(),
         roi_database.loc[roi_database['roi_unique_name'].isin(_names_csp)].copy(),
         _cspt,
-        f"ROI responses by group (CSp = {_cspt})",
-        os.path.join(results_dir, f"{safe_filename(container_id)}_roi_group_boxplots_csp_{safe_filename(_cspt)}.png"),
+        f"ROI responses by group (CSp = {_cspt}){_roi_type_label}",
+        os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_roi_group_boxplots_csp_{safe_filename(_cspt)}.png"),
     ))
 
 bp_stats_results = {}
@@ -720,8 +730,8 @@ if not roi_identity_df_norm.empty:
     plot_group_identity_boxplots(
         roi_identity_subset=roi_identity_df_norm,
         roi_database_subset=roi_database,
-        figure_title='Normalized ROI averaged responses by group and odor identity',
-        output_path=os.path.join(results_dir, f"{safe_filename(container_id)}_normalized_roi_group_boxplots.png"),
+        figure_title=f'Normalized ROI averaged responses by group and odor identity{_roi_type_label}',
+        output_path=os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_normalized_roi_group_boxplots.png"),
         normalize_odor_name=normalize_odor_name,
         colors_hex=colors_hex,
         pvalue_to_stars=pvalue_to_stars,
@@ -784,8 +794,8 @@ _ps_bp_subsets = [
         roi_post_stim_identity_df,
         roi_database,
         None,
-        'Post-stimulus ROI averaged responses by group and odor identity',
-        os.path.join(results_dir, f"{safe_filename(container_id)}_roi_group_boxplots_post_stim.png"),
+        f'Post-stimulus ROI averaged responses by group and odor identity{_roi_type_label}',
+        os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_roi_group_boxplots_post_stim.png"),
     ),
 ]
 for _cspt in ['MCH', 'OCTT', 'IAA']:
@@ -795,8 +805,8 @@ for _cspt in ['MCH', 'OCTT', 'IAA']:
         roi_post_stim_identity_df.loc[roi_post_stim_identity_df['roi_unique_name'].isin(_names_csp)].copy(),
         roi_database.loc[roi_database['roi_unique_name'].isin(_names_csp)].copy(),
         _cspt,
-        f"Post-stimulus ROI responses by group (CSp = {_cspt})",
-        os.path.join(results_dir, f"{safe_filename(container_id)}_roi_group_boxplots_post_stim_csp_{safe_filename(_cspt)}.png"),
+        f"Post-stimulus ROI responses by group (CSp = {_cspt}){_roi_type_label}",
+        os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_roi_group_boxplots_post_stim_csp_{safe_filename(_cspt)}.png"),
     ))
 
 bp_post_stim_stats_results = {}
@@ -977,8 +987,8 @@ if not roi_post_stim_identity_df_norm.empty:
     plot_group_identity_boxplots(
         roi_identity_subset=roi_post_stim_identity_df_norm,
         roi_database_subset=roi_database,
-        figure_title='Normalized post-stimulus ROI averaged responses by group and odor identity',
-        output_path=os.path.join(results_dir, f"{safe_filename(container_id)}_normalized_roi_group_boxplots_post_stim.png"),
+        figure_title=f'Normalized post-stimulus ROI averaged responses by group and odor identity{_roi_type_label}',
+        output_path=os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_normalized_roi_group_boxplots_post_stim.png"),
         normalize_odor_name=normalize_odor_name,
         colors_hex=colors_hex,
         pvalue_to_stars=pvalue_to_stars,
@@ -997,8 +1007,8 @@ _hist_subsets = [
         'all',
         roi_identity_df_norm,
         None,
-        'ROI response distributions by group and odor identity',
-        os.path.join(results_dir, f"{safe_filename(container_id)}_response_histograms.png"),
+        f'ROI response distributions by group and odor identity{_roi_type_label}',
+        os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_response_histograms.png"),
     ),
 ]
 for _cspt in ['MCH', 'OCTT', 'IAA']:
@@ -1007,8 +1017,8 @@ for _cspt in ['MCH', 'OCTT', 'IAA']:
         _cspt,
         roi_identity_df_norm.loc[roi_identity_df_norm['roi_unique_name'].isin(_names_csp_h)].copy(),
         _cspt,
-        f"ROI response distributions (CSp = {_cspt})",
-        os.path.join(results_dir, f"{safe_filename(container_id)}_response_histograms_csp_{safe_filename(_cspt)}.png"),
+        f"ROI response distributions (CSp = {_cspt}){_roi_type_label}",
+        os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_response_histograms_csp_{safe_filename(_cspt)}.png"),
     ))
 
 for _lbl_h, _id_df_h, _csp_od_h, _ttl_h, _opath_h in _hist_subsets:
@@ -1208,10 +1218,10 @@ else:
             axis.legend(loc='best', fontsize=8)
 
         axes[-1].set_xlabel('Time (s)')
-        fig.suptitle('Fly-averaged traces by group', y=1.01)
+        fig.suptitle(f'Fly-averaged traces by group{_roi_type_label}', y=1.01)
         plt.tight_layout()
         fig.savefig(
-            os.path.join(results_dir, f"{safe_filename(container_id)}_fly_averaged_traces_by_group.png"),
+            os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_fly_averaged_traces_by_group.png"),
             dpi=200,
             bbox_inches='tight',
         )
@@ -1268,10 +1278,10 @@ else:
                     axis.set_xlabel('Time (s)')
                 axis.grid(axis='y', alpha=0.25)
 
-        fig_grid.suptitle('Fly traces by group (rows) and odor identity (columns)', y=1.01)
+        fig_grid.suptitle(f'Fly traces by group (rows) and odor identity (columns){_roi_type_label}', y=1.01)
         plt.tight_layout()
         fig_grid.savefig(
-            os.path.join(results_dir, f"{safe_filename(container_id)}_fly_traces_grid_by_group_and_odor.png"),
+            os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_fly_traces_grid_by_group_and_odor.png"),
             dpi=200,
             bbox_inches='tight',
         )
@@ -1423,10 +1433,10 @@ else:
                     axis.legend(loc='best', fontsize=8)
 
                 axes_norm[-1].set_xlabel('Time (s)')
-                fig_norm.suptitle('Normalized fly-averaged traces by group', y=1.01)
+                fig_norm.suptitle(f'Normalized fly-averaged traces by group{_roi_type_label}', y=1.01)
                 plt.tight_layout()
                 fig_norm.savefig(
-                    os.path.join(results_dir, f"{safe_filename(container_id)}_normalized_fly_averaged_traces_by_group.png"),
+                    os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_normalized_fly_averaged_traces_by_group.png"),
                     dpi=200,
                     bbox_inches='tight',
                 )
@@ -1483,10 +1493,10 @@ else:
                             axis.set_xlabel('Time (s)')
                         axis.grid(axis='y', alpha=0.25)
 
-                fig_grid_norm.suptitle('Normalized fly traces by group (rows) and odor identity (columns)', y=1.01)
+                fig_grid_norm.suptitle(f'Normalized fly traces by group (rows) and odor identity (columns){_roi_type_label}', y=1.01)
                 plt.tight_layout()
                 fig_grid_norm.savefig(
-                    os.path.join(results_dir, f"{safe_filename(container_id)}_normalized_fly_traces_grid_by_group_and_odor.png"),
+                    os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_normalized_fly_traces_grid_by_group_and_odor.png"),
                     dpi=200,
                     bbox_inches='tight',
                 )
@@ -1553,9 +1563,9 @@ for _cspt_tr in ['MCH', 'OCTT', 'IAA']:
                 _tr_ax.grid(axis='y', alpha=0.25)
                 _tr_ax.legend(loc='best', fontsize=8)
             _tr_axes[-1].set_xlabel('Time (s)')
-            _tr_fig.suptitle(f"Fly-averaged traces by group (CSp = {_cspt_tr})", y=1.01)
+            _tr_fig.suptitle(f"Fly-averaged traces by group (CSp = {_cspt_tr}){_roi_type_label}", y=1.01)
             plt.tight_layout()
-            _tr_fig.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}_fly_averaged_traces_by_group_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
+            _tr_fig.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_fly_averaged_traces_by_group_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
             plt.show()
 
             # Grid figure
@@ -1596,9 +1606,9 @@ for _cspt_tr in ['MCH', 'OCTT', 'IAA']:
                     if _ri == len(_tr_groups) - 1:
                         _tr_ax.set_xlabel('Time (s)')
                     _tr_ax.grid(axis='y', alpha=0.25)
-            _tr_fig_g.suptitle(f"Fly traces by group and odor identity (CSp = {_cspt_tr})", y=1.01)
+            _tr_fig_g.suptitle(f"Fly traces by group and odor identity (CSp = {_cspt_tr}){_roi_type_label}", y=1.01)
             plt.tight_layout()
-            _tr_fig_g.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}_fly_traces_grid_by_group_and_odor_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
+            _tr_fig_g.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_fly_traces_grid_by_group_and_odor_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
             plt.show()
 
     # --- Normalized traces ---
@@ -1644,9 +1654,9 @@ for _cspt_tr in ['MCH', 'OCTT', 'IAA']:
                 _tr_ax.grid(axis='y', alpha=0.25)
                 _tr_ax.legend(loc='best', fontsize=8)
             _tr_axes_n[-1].set_xlabel('Time (s)')
-            _tr_fig_n.suptitle(f"Normalized fly-averaged traces by group (CSp = {_cspt_tr})", y=1.01)
+            _tr_fig_n.suptitle(f"Normalized fly-averaged traces by group (CSp = {_cspt_tr}){_roi_type_label}", y=1.01)
             plt.tight_layout()
-            _tr_fig_n.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}_normalized_fly_averaged_traces_by_group_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
+            _tr_fig_n.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_normalized_fly_averaged_traces_by_group_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
             plt.show()
 
             # Grid figure
@@ -1687,9 +1697,9 @@ for _cspt_tr in ['MCH', 'OCTT', 'IAA']:
                     if _ri == len(_tr_groups_n) - 1:
                         _tr_ax.set_xlabel('Time (s)')
                     _tr_ax.grid(axis='y', alpha=0.25)
-            _tr_fig_gn.suptitle(f"Normalized fly traces by group and odor identity (CSp = {_cspt_tr})", y=1.01)
+            _tr_fig_gn.suptitle(f"Normalized fly traces by group and odor identity (CSp = {_cspt_tr}){_roi_type_label}", y=1.01)
             plt.tight_layout()
-            _tr_fig_gn.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}_normalized_fly_traces_grid_by_group_and_odor_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
+            _tr_fig_gn.savefig(os.path.join(results_dir, f"{safe_filename(container_id)}{_roi_type_tag}_normalized_fly_traces_grid_by_group_and_odor_csp_{safe_filename(_cspt_tr)}.png"), dpi=200, bbox_inches='tight')
             plt.show()
 
  # %%

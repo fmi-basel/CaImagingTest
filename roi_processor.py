@@ -24,6 +24,8 @@ class ROISelector:
         spacing_factor=1.5,
         stimulus_id_trace=None,
         roi_names=None,
+        fig=None,
+        axes=None,
     ):
         self.movie = movie
         self.sd_map = sd_map
@@ -42,11 +44,18 @@ class ROISelector:
         self.roi_colors = []
         self.current_offset = 0
         self.background_idx = None
+        self.finished = False  # set to True when user confirms selection
 
         self.cmap = cm.get_cmap('tab10')
         self.stim_cmap = cm.get_cmap('Set3')  # Color map for stimulus vials
 
-        self.fig, (self.ax_map, self.ax_trace) = plt.subplots(1, 2, figsize=(16, 8))
+        self._embedded = fig is not None and axes is not None
+        if self._embedded:
+            self.fig = fig
+            self.ax_map, self.ax_trace = axes
+        else:
+            self.fig, (self.ax_map, self.ax_trace) = plt.subplots(1, 2, figsize=(16, 8))
+
         self.ax_map.imshow(sd_map, cmap='magma', interpolation='nearest', origin='upper')
         self.ax_map.set_title("Select ROIs\n'b': bg | 'z': undo | 'r': rename last | 'c': clear all | 'q': finish")
 
@@ -54,29 +63,55 @@ class ROISelector:
         self.ax_trace.set_title('Stacked Delta F/F Traces (Waterfall Plot)')
 
         self._next_is_background = False
+
+        # Mode indicator shown in the upper-right corner of the image axes
+        self._mode_label = self.ax_map.text(
+            0.99, 0.97, '',
+            transform=self.ax_map.transAxes,
+            ha='right', va='top',
+            fontsize=10, fontweight='bold',
+            color='white',
+            bbox=dict(facecolor='black', alpha=0.55, boxstyle='round,pad=0.3'),
+            zorder=10,
+        )
+        self._update_mode_label()
+
         self._init_selector()
         self.fig.canvas.mpl_connect('key_press_event', self.on_key)
-        plt.tight_layout()
-        # Avoid entering a nested Qt event loop when already running inside a Qt GUI
-        # (important on Windows where a second exec_() call deadlocks).
-        try:
-            from PyQt5.QtWidgets import QApplication as _QApp
-            if _QApp.instance() is not None:
-                plt.show(block=False)
-                return
-        except ImportError:
-            pass
-        plt.show()
+
+        if not self._embedded:
+            plt.tight_layout()
+            # Avoid entering a nested Qt event loop when already running inside a Qt GUI
+            # (important on Windows where a second exec_() call deadlocks).
+            try:
+                from PyQt5.QtWidgets import QApplication as _QApp
+                if _QApp.instance() is not None:
+                    plt.show(block=False)
+                    return
+            except ImportError:
+                pass
+            plt.show()
 
     def _init_selector(self):
         props = dict(color='white', linestyle='-', linewidth=2, alpha=1)
         self.poly = PolygonSelector(self.ax_map, self.onselect, props=props)
+
+    def _update_mode_label(self):
+        """Refresh the mode indicator in the upper-right corner of ax_map."""
+        if self._next_is_background:
+            self._mode_label.set_text('Mode: BACKGROUND')
+            self._mode_label.set_color('yellow')
+        else:
+            self._mode_label.set_text('Mode: ROI')
+            self._mode_label.set_color('white')
+        self.fig.canvas.draw_idle()
 
     def onselect(self, verts):
         if len(verts) > 2:
             is_bg = self._next_is_background
             self.add_roi(verts, is_background=is_bg)
             self._next_is_background = False
+            self._update_mode_label()
             self.poly.disconnect_events()
             self._init_selector()
             if not is_bg:
@@ -163,6 +198,7 @@ class ROISelector:
         if event.key == 'b':
             print("Next ROI will be marked as BACKGROUND")
             self._next_is_background = True
+            self._update_mode_label()
         elif event.key == 'z':
             self._undo_last_roi()
         elif event.key == 'r':
@@ -183,9 +219,13 @@ class ROISelector:
             self.raw_traces = []
             self.background_idx = None
             self._stim_drawn = False
+            self._next_is_background = False
+            self._update_mode_label()
             self.fig.canvas.draw()
         elif event.key == 'q':
-            plt.close(self.fig)
+            self.finished = True
+            if not self._embedded:
+                plt.close(self.fig)
 
     def _prompt_roi_name(self, default_name):
         """Show a Qt input dialog to let the user name the ROI."""
@@ -303,6 +343,43 @@ class ROISelector:
             print(f"Renamed ROI {idx} from '{old_name}' to '{new_name}'")
         else:
             print(f"Index {idx} out of range. Valid indices: 0-{len(self.roi_names)-1}")
+
+    def get_results(self, fs, df_f_method='1-11s'):
+        """Extract and return the full ROI selection result dict after selection is complete."""
+        roi_masks = list(self.roi_masks)
+        raw_traces = list(self.raw_traces)
+        bg_subtracted = self.get_background_subtracted_traces()
+        bg_subtracted_df_traces = [calculate_df_f(trace, fs, method=df_f_method) for trace in bg_subtracted]
+        roi_names_out = list(self.roi_names) if self.roi_names else [f'ROI{i+1}' for i in range(len(roi_masks))]
+        bg_idx = self.background_idx
+
+        if bg_idx is not None and 0 <= bg_idx < len(roi_masks):
+            background_mask = roi_masks[bg_idx]
+            background_polygon = np.asarray(self.rois[bg_idx], dtype=float)
+            bg_raw_trace = raw_traces[bg_idx]
+            roi_masks.pop(bg_idx)
+            roi_names_out.pop(bg_idx)
+            raw_traces.pop(bg_idx)
+            bg_subtracted_df_traces.pop(bg_idx)
+        else:
+            background_mask = np.zeros_like(self.sd_map, dtype=bool)
+            background_polygon = np.empty((0, 2), dtype=float)
+            bg_raw_trace = None
+            if bg_idx is None:
+                raise ValueError(
+                    "No background ROI selected. Please select a background ROI by pressing 'b' before drawing the ROI."
+                )
+
+        return {
+            'roi_masks': roi_masks,
+            'roi_names': roi_names_out,
+            'raw_traces': raw_traces,
+            'bg_subtracted_df_traces': bg_subtracted_df_traces,
+            'bg_idx': bg_idx,
+            'background_mask': background_mask,
+            'background_polygon': background_polygon,
+            'background_raw_trace': bg_raw_trace,
+        }
 
     def _draw_stimulus_periods(self):
         """Draw color-coded stimulus periods based on vial ID"""

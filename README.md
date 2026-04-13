@@ -19,7 +19,7 @@ Use python3.11 for the suitable Suite2p version. Otherwise the script will have 
     - suite2p: > pip install suite2p
     - For VS Code interactive kernel, ipykernel: conda install ipykernel -c conda-forge 
     - For interactive ROI selection: pyqt: conda install pyqt=5 -c conda-forge
-    - other packages as necessary (once you run the code you'll see it)
+    - other packages as necessary (once you run the code you'll see it), one example conda install conda-forge::scikit-image
     - For server computer Windows to fix 
         - Fixing the shm.dll error: conda install mkl intel-openmp --force-reinstall -c conda-forge
 

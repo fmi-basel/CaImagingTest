@@ -35,14 +35,15 @@ from PyQt5.QtWidgets import (
     QListWidget, QListWidgetItem,
     QTextEdit, QFileDialog,
     QComboBox, QGroupBox,
-    QMessageBox, QSplitter,
-    QCheckBox, QDialog, QScrollArea,
+    QMessageBox, QScrollArea,
+    QCheckBox, QTabWidget, QStackedWidget,
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer, QEventLoop
 from PyQt5.QtGui import QFont, QColor, QPixmap
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg, NavigationToolbar2QT
 
 from utilities import map_stimulus_ids_from_osf, temporal_denoise
-from roi_processor import run_roi_selection
+from roi_processor import run_roi_selection, ROISelector
 from helpers_figures import (
     plot_mean_std_projection,
     plot_roi_masks_and_traces,
@@ -92,10 +93,30 @@ class ROIProcessingGUI(QMainWindow):
         central = QWidget()
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
-        root.setSpacing(8)
-        root.setContentsMargins(10, 10, 10, 10)
+        root.setSpacing(0)
+        root.setContentsMargins(6, 6, 6, 6)
 
-        # ── Top row: Configuration (left) | Series (right) ───────────────────
+        self.tabs = QTabWidget()
+        root.addWidget(self.tabs)
+
+        # Tab index constants for programmatic switching
+        self.SETUP_TAB = 0
+        self.ROI_TAB = 1
+        self.RESULTS_TAB = 2
+        self.LOG_TAB = 3
+
+        self.tabs.addTab(self._build_setup_tab(), 'Setup')
+        self.tabs.addTab(self._build_roi_tab(), 'ROI Selection')
+        self.tabs.addTab(self._build_results_tab(), 'Results')
+        self.tabs.addTab(self._build_log_tab(), 'Log')
+
+    def _build_setup_tab(self):
+        """Configuration + Series panel."""
+        widget = QWidget()
+        root = QVBoxLayout(widget)
+        root.setSpacing(8)
+        root.setContentsMargins(8, 8, 8, 8)
+
         top_row = QHBoxLayout()
         top_row.setSpacing(8)
 
@@ -114,21 +135,22 @@ class ROIProcessingGUI(QMainWindow):
         cfg.addWidget(browse_btn, 0, 2)
 
         cfg.addWidget(QLabel('Container ID:'), 1, 0)
-        self.container_edit = QLineEdit()
-        self.container_edit.setPlaceholderText('e.g. 2025_10_Gamma1_CC_extinction')
-        self.container_edit.editingFinished.connect(self._scan_days)
-        cfg.addWidget(self.container_edit, 1, 1)
-        scan_btn = QPushButton('Scan')
-        scan_btn.setFixedWidth(55)
-        scan_btn.setToolTip('Scan for available day directories')
-        scan_btn.clicked.connect(self._scan_days)
-        cfg.addWidget(scan_btn, 1, 2)
+        self.container_combo = QComboBox()
+        self.container_combo.setEditable(True)
+        self.container_combo.lineEdit().setPlaceholderText('e.g. 2025_10_Gamma1_CC_extinction')
+        self.container_combo.currentTextChanged.connect(self._scan_days)
+        cfg.addWidget(self.container_combo, 1, 1, 1, 2)
 
         cfg.addWidget(QLabel('Day ID:'), 2, 0)
         self.day_combo = QComboBox()
         self.day_combo.setEditable(True)
         self.day_combo.lineEdit().setPlaceholderText('e.g. 2025_11_13')
-        cfg.addWidget(self.day_combo, 2, 1, 1, 2)
+        cfg.addWidget(self.day_combo, 2, 1)
+        scan_btn = QPushButton('Scan')
+        scan_btn.setFixedWidth(55)
+        scan_btn.setToolTip('Scan for available day directories')
+        scan_btn.clicked.connect(self._scan_days)
+        cfg.addWidget(scan_btn, 2, 2)
 
         self.auto_roi_check = QCheckBox('Auto ROI Selection')
         self.auto_roi_check.toggled.connect(self._on_auto_roi_toggled)
@@ -162,7 +184,7 @@ class ROIProcessingGUI(QMainWindow):
         self.process_btn.clicked.connect(self._process_selected)
         btn_row.addWidget(self.process_btn)
 
-        self.process_all_btn = QPushButton('Process All Pending')
+        self.process_all_btn = QPushButton('Process All Unanalyzed')
         self.process_all_btn.setEnabled(False)
         self.process_all_btn.clicked.connect(self._process_all_pending)
         btn_row.addWidget(self.process_all_btn)
@@ -172,23 +194,92 @@ class ROIProcessingGUI(QMainWindow):
         top_row.addWidget(series_group, stretch=1)
 
         root.addLayout(top_row)
+        return widget
 
-        # ── Log ──────────────────────────────────────────────────────────────
-        log_group = QGroupBox('Log')
-        log_layout = QVBoxLayout()
-        self.log_text = QTextEdit()
-        self.log_text.setReadOnly(True)
-        self.log_text.setFont(QFont('Courier New', 9))
-        clear_log_btn = QPushButton('Clear Log')
-        clear_log_btn.setFixedWidth(90)
-        clear_log_btn.clicked.connect(self.log_text.clear)
+    def _build_roi_tab(self):
+        """ROI selection tab — placeholder until a series is being processed."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+
+        self._roi_stack = QStackedWidget()
+
+        # Page 0: placeholder shown when idle
+        placeholder = QLabel(
+            'Select a series on the Setup tab and click\n'
+            '"Process Selected Series" to begin ROI selection here.\n\n'
+            "Keys:  'b' background  |  'z' undo  |  'r' rename last  |  'c' clear all  |  'q' confirm"
+        )
+        placeholder.setAlignment(Qt.AlignCenter)
+        self._roi_stack.addWidget(placeholder)
+
+        # Page 1: container for canvas + toolbar + buttons (populated dynamically)
+        self._roi_canvas_page = QWidget()
+        self._roi_canvas_page_layout = QVBoxLayout(self._roi_canvas_page)
+        self._roi_canvas_page_layout.setSpacing(4)
+        self._roi_canvas_page_layout.setContentsMargins(0, 0, 0, 0)
+        self._roi_stack.addWidget(self._roi_canvas_page)
+
+        layout.addWidget(self._roi_stack)
+        return widget
+
+    def _build_results_tab(self):
+        """Results tab with sub-tabs for each plot type."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+
+        self.results_sub_tabs = QTabWidget()
+
+        # Sub-tab: Single-Trial overlaid responses
+        overlaid_widget = QWidget()
+        ov_layout = QVBoxLayout(overlaid_widget)
+        ov_layout.setContentsMargins(0, 0, 0, 0)
+        self.overlaid_scroll = QScrollArea()
+        self.overlaid_scroll.setWidgetResizable(False)
+        self.overlaid_label = QLabel('Results will appear here after analysis.')
+        self.overlaid_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.overlaid_scroll.setWidget(self.overlaid_label)
+        ov_layout.addWidget(self.overlaid_scroll)
+        self.results_sub_tabs.addTab(overlaid_widget, 'Single-Trial')
+
+        # Sub-tab: Trial-averaged responses
+        avg_widget = QWidget()
+        av_layout = QVBoxLayout(avg_widget)
+        av_layout.setContentsMargins(0, 0, 0, 0)
+        self.avg_scroll = QScrollArea()
+        self.avg_scroll.setWidgetResizable(False)
+        self.avg_label = QLabel('Results will appear here after analysis.')
+        self.avg_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
+        self.avg_scroll.setWidget(self.avg_label)
+        av_layout.addWidget(self.avg_scroll)
+        self.results_sub_tabs.addTab(avg_widget, 'Trial-Averaged')
+
+        layout.addWidget(self.results_sub_tabs)
+        return widget
+
+    def _build_log_tab(self):
+        """Log tab."""
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(6, 6, 6, 6)
+        layout.setSpacing(4)
+
         log_top = QHBoxLayout()
         log_top.addStretch()
-        log_top.addWidget(clear_log_btn)
-        log_layout.addLayout(log_top)
-        log_layout.addWidget(self.log_text)
-        log_group.setLayout(log_layout)
-        root.addWidget(log_group, stretch=1)
+        clear_btn = QPushButton('Clear Log')
+        clear_btn.setFixedWidth(90)
+        clear_btn.clicked.connect(lambda: self.log_text.clear())
+        log_top.addWidget(clear_btn)
+        layout.addLayout(log_top)
+
+        self.log_text = QTextEdit()
+        self.log_text.setReadOnly(True)
+        self.log_text.setFont(QFont('Courier New', 12))
+        layout.addWidget(self.log_text)
+        return widget
 
     # ── helpers ──────────────────────────────────────────────────────────────
 
@@ -200,12 +291,34 @@ class ROIProcessingGUI(QMainWindow):
         directory = QFileDialog.getExistingDirectory(self, 'Select Base Directory')
         if directory:
             self.base_dir_edit.setText(directory)
-            self._scan_days()
+            self._scan_containers()
+
+    def _scan_containers(self):
+        """Populate the Container ID combo with subdirectories of base_dir."""
+        base_dir = self.base_dir_edit.text().strip()
+        if not base_dir or not os.path.isdir(base_dir):
+            return
+        containers = sorted(
+            d for d in os.listdir(base_dir)
+            if os.path.isdir(os.path.join(base_dir, d)) and not d.startswith('.')
+        )
+        current_text = self.container_combo.currentText()
+        self.container_combo.blockSignals(True)
+        self.container_combo.clear()
+        self.container_combo.addItems(containers)
+        idx = self.container_combo.findText(current_text)
+        if idx >= 0:
+            self.container_combo.setCurrentIndex(idx)
+        elif current_text:
+            self.container_combo.setEditText(current_text)
+        self.container_combo.blockSignals(False)
+        self._log(f'Found {len(containers)} container directories in {base_dir}')
+        self._scan_days()
 
     def _scan_days(self):
         """Populate the Day ID combo with subdirectories found inside container_dir."""
         base_dir = self.base_dir_edit.text().strip()
-        container_id = self.container_edit.text().strip()
+        container_id = self.container_combo.currentText().strip()
         if not base_dir or not container_id:
             return
         container_dir = os.path.join(base_dir, container_id)
@@ -230,29 +343,92 @@ class ROIProcessingGUI(QMainWindow):
     def _on_auto_roi_toggled(self, checked):
         self.auto_profile_combo.setEnabled(checked)
 
-    def _show_image_dialog(self, png_path, title='Plot'):
-        """Open a modal dialog displaying a saved PNG file."""
-        dialog = QDialog(self)
-        dialog.setWindowTitle(title)
-        dialog.resize(960, 640)
-        layout = QVBoxLayout(dialog)
-        layout.setContentsMargins(4, 4, 4, 4)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        label = QLabel()
-        pixmap = QPixmap(png_path)
-        label.setPixmap(pixmap)
-        label.setAlignment(Qt.AlignCenter)
-        scroll.setWidget(label)
-        layout.addWidget(scroll)
-        close_btn = QPushButton('Close')
-        close_btn.setFixedWidth(80)
-        close_btn.clicked.connect(dialog.accept)
-        btn_row = QHBoxLayout()
+    def _run_roi_selection_in_tab(self, movie, extraction_image, fs, stimulus_id_trace, df_f_method='1-11s'):
+        """Embed an interactive ROI selector in the ROI Selection tab and block until confirmed."""
+        fig, (ax_map, ax_trace) = plt.subplots(1, 2, figsize=(16, 7))
+        canvas = FigureCanvasQTAgg(fig)
+        canvas.setFocusPolicy(Qt.StrongFocus)
+        toolbar = NavigationToolbar2QT(canvas, self._roi_canvas_page)
+
+        hint = QLabel("Keys: 'b' background  |  'z' undo  |  'r' rename last  |  'c' clear all  |  'q' confirm")
+        hint.setAlignment(Qt.AlignCenter)
+
+        btn_widget = QWidget()
+        btn_row = QHBoxLayout(btn_widget)
         btn_row.addStretch()
-        btn_row.addWidget(close_btn)
-        layout.addLayout(btn_row)
-        dialog.exec_()
+        confirm_btn = QPushButton('Confirm ROI Selection')
+        confirm_btn.setDefault(True)
+        cancel_btn = QPushButton('Cancel')
+        btn_row.addWidget(confirm_btn)
+        btn_row.addWidget(cancel_btn)
+
+        page_layout = self._roi_canvas_page_layout
+        page_layout.addWidget(toolbar)
+        page_layout.addWidget(canvas, stretch=1)
+        page_layout.addWidget(hint)
+        page_layout.addWidget(btn_widget)
+
+        selector = ROISelector(
+            movie=movie,
+            sd_map=extraction_image,
+            fs=fs,
+            stimulus_id_trace=stimulus_id_trace,
+            fig=fig,
+            axes=(ax_map, ax_trace),
+        )
+        fig.tight_layout()
+        canvas.draw()
+
+        # Switch to ROI Selection tab
+        self._roi_stack.setCurrentIndex(1)
+        self.tabs.setCurrentIndex(self.ROI_TAB)
+        canvas.setFocus()
+
+        # Spin a local (nested) event loop — blocks this call-frame but keeps the GUI responsive
+        loop = QEventLoop()
+        cancelled = [False]
+
+        def on_confirm():
+            loop.quit()
+
+        def on_cancel():
+            cancelled[0] = True
+            loop.quit()
+
+        confirm_btn.clicked.connect(on_confirm)
+        cancel_btn.clicked.connect(on_cancel)
+
+        timer = QTimer(self)
+        timer.timeout.connect(lambda: loop.quit() if selector.finished else None)
+        timer.start(100)
+
+        loop.exec_()
+        timer.stop()
+
+        # Remove canvas widgets from the page container
+        while page_layout.count():
+            item = page_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+
+        self._roi_stack.setCurrentIndex(0)
+        plt.close(fig)
+
+        if cancelled[0]:
+            raise RuntimeError('ROI selection cancelled by user.')
+
+        return selector.get_results(fs, df_f_method=df_f_method)
+
+    def _show_results_in_tab(self, overlaid_path, avg_path):
+        """Load saved plot PNGs into the Results tab sub-tabs and switch to it."""
+        if overlaid_path and os.path.isfile(overlaid_path):
+            self.overlaid_label.setPixmap(QPixmap(overlaid_path))
+            self.overlaid_label.adjustSize()
+        if avg_path and os.path.isfile(avg_path):
+            self.avg_label.setPixmap(QPixmap(avg_path))
+            self.avg_label.adjustSize()
+        self.tabs.setCurrentIndex(self.RESULTS_TAB)
+        QApplication.processEvents()
 
     def _on_selection_changed(self):
         self.process_btn.setEnabled(bool(self.series_list.selectedItems()))
@@ -279,7 +455,7 @@ class ROIProcessingGUI(QMainWindow):
 
     def _load_series(self):
         base_dir = self.base_dir_edit.text().strip()
-        container_id = self.container_edit.text().strip()
+        container_id = self.container_combo.currentText().strip()
         day_id = self.day_combo.currentText().strip()
 
         if not all([base_dir, container_id, day_id]):
@@ -329,6 +505,7 @@ class ROIProcessingGUI(QMainWindow):
         self._set_series_status(series_path, 'processing')
         self.process_btn.setEnabled(False)
         self.process_all_btn.setEnabled(False)
+        self.tabs.setCurrentIndex(self.LOG_TAB)
         QApplication.processEvents()
 
         try:
@@ -350,7 +527,7 @@ class ROIProcessingGUI(QMainWindow):
 
     def _analyze_series(self, series_path):
         base_dir = self.base_dir_edit.text().strip()
-        container_id = self.container_edit.text().strip()
+        container_id = self.container_combo.currentText().strip()
         day_id = self.day_combo.currentText().strip()
 
         experiment_dir = os.path.join(base_dir, container_id)
@@ -417,21 +594,31 @@ class ROIProcessingGUI(QMainWindow):
             roi_selection_mode = 'manual'
 
         auto_roi_params = get_auto_roi_params(auto_roi_profile)
-        print("Opening ROI selection window…")
-        print("  Controls: 'b' bg | 'z' undo | 'r' rename last | 'c' clear all | 'q' finish")
 
-        roi_result = run_roi_selection(
-            mode=roi_selection_mode,
-            movie=processed_movie_cropped,
-            extraction_image=extraction_image,
-            fs=downsampled_fr,
-            results_dir=results_dir,
-            series_id=series_id,
-            stimulus_id_trace=stimulus_id_trace,
-            auto_roi_params=auto_roi_params,
-            df_f_method='1-11s',
-            gui_mode=True,
-        )
+        if not self.auto_roi_check.isChecked():
+            print('Switching to ROI Selection tab…')
+            print("  Keys: 'b' bg | 'z' undo | 'r' rename | 'c' clear | 'q' confirm")
+            roi_result = self._run_roi_selection_in_tab(
+                movie=processed_movie_cropped,
+                extraction_image=extraction_image,
+                fs=downsampled_fr,
+                stimulus_id_trace=stimulus_id_trace,
+                df_f_method='1-11s',
+            )
+        else:
+            print('Running automatic ROI selection…')
+            roi_result = run_roi_selection(
+                mode='custom-automatic',
+                movie=processed_movie_cropped,
+                extraction_image=extraction_image,
+                fs=downsampled_fr,
+                results_dir=results_dir,
+                series_id=series_id,
+                stimulus_id_trace=stimulus_id_trace,
+                auto_roi_params=auto_roi_params,
+                df_f_method='1-11s',
+                gui_mode=True,
+            )
 
         roi_masks = roi_result['roi_masks']
         roi_names = roi_result['roi_names']
@@ -653,9 +840,6 @@ class ROIProcessingGUI(QMainWindow):
                 colors_hex=self.DEFAULT_COLORS,
                 font_size=6, cell_w=3.5, cell_h=2.6,
             )
-            if overlaid_plot_path:
-                self._show_image_dialog(overlaid_plot_path, f'{series_id} — Single-Trial Responses')
-
             avg_plot_path = plot_trial_averaged_roi_responses(
                 roi_names=roi_names,
                 roi_masks=roi_masks,
@@ -674,8 +858,7 @@ class ROIProcessingGUI(QMainWindow):
                 post_window_frames=post_window_frames,
                 max_cols=5, cell_w=9, cell_h=3, font_size=6,
             )
-            if avg_plot_path:
-                self._show_image_dialog(avg_plot_path, f'{series_id} — Trial-Averaged Responses')
+            self._show_results_in_tab(overlaid_plot_path, avg_plot_path)
 
             
 
