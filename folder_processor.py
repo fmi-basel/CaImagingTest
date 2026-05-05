@@ -8,8 +8,9 @@ import pandas as pd
 
 
 #%%
-container_name = '2025_10_Gamma1_CC_extinction' # Update this path accordingly
-day_name = '2025_11_13' # Update this path accordingly
+container_name = 'alpha3_24hsappet' # Update this path accordingly
+day_name = '2025_10_14' # Update this path accordingly
+common_file_names = ['a.osf'] # Copy these files to every folder automatically
 
 main_dir = "/Volumes/tungsten/scratch/gfelsenb/Ana/2p-imaging/burak/"
 exp_path = os.path.join(main_dir, container_name) # Update this path accordingly
@@ -20,7 +21,7 @@ day_folder = Path(day_folder_path)
 if not day_folder.exists():
     print(f"Error: Folder {day_folder_path} does not exist")
     exit('Terminating script.')
-
+#%%
 # Pattern to match S1-T##### at the beginning of filename
 pattern = re.compile(r'^(S1-T\d{5})')
 
@@ -67,6 +68,22 @@ for file in files:
     else:
         print(f"Warning: No valid identifier found in {file.name}")
 
+# Get all the  folders in the day folder
+folders = [f for f in day_folder.iterdir() if f.is_dir()]
+# Copy common files to each folder
+for folder in folders:
+    for common_file in common_file_names:
+        source_file = day_folder / common_file
+        if source_file.exists():
+            # change the target file name to be the folder name + common file extension
+            target_file = folder / f"{folder.name}{source_file.suffix}"
+            try:
+                shutil.copy(str(source_file), str(target_file))
+                print(f"Copied {common_file} to {folder.name}/")
+            except Exception as e:
+                print(f"Error copying {common_file} to {folder.name}: {e}")
+        else:
+            print(f"Warning: Common file {common_file} not found in {day_folder}")
 #%%
 # Update database with new seriesIDs
 print("\nUpdating database with new seriesIDs...")
